@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Box, TextField, IconButton, Stack, Typography } from "@mui/material";
 import SendIcon from "@mui/icons-material/ArrowForward";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
-import ErrorOutlineIcon from "@mui/icons-material/ErrorOutlineOutlined";
+import ErrorOutlineIcon from "@mui/icons-material/ErrorOutline";
 
 import { useAgentSocket } from "../hooks/useAgentSocket";
 import PageBanner from "../components/shared/PageBanner";
@@ -10,6 +10,7 @@ import ReasoningStream from "../components/console/ReasoningStream";
 import RiskGateIndicator from "../components/console/RiskGateIndicator";
 import TopMatches from "../components/console/TopMatches";
 import TransactionTimeline from "../components/console/TransactionTimeline";
+import ToolChips from "../components/console/ToolChips";
 import EscalationBanner from "../components/console/EscalationBanner";
 
 const API_BASE = "http://localhost:8000";
@@ -190,8 +191,14 @@ export default function AgentConsolePage() {
 
         <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", md: "1.4fr 1fr" }, gap: 3 }}>
           <Box sx={cardSx}>
-            <ReasoningStream events={events} />
+            <ReasoningStream events={events} isRunning={isRunning} />
           </Box>
+
+          {candidates.length > 0 && (
+            <Box sx={{ ...cardSx, mt: 2.5 }}>
+              <ToolChips candidates={candidates} product={product} riskGate={riskGate} orderInfo={orderInfo} />
+            </Box>
+          )}
 
           <Stack spacing={2.5}>
             <Box sx={cardSx}>
