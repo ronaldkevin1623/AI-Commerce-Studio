@@ -12,7 +12,7 @@ export default function FailureCard({ failure, recovery }) {
   return (
     <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", sm: "1fr auto 1fr" }, gap: 1.5, alignItems: "stretch" }}>
       <Box sx={{ bgcolor: "error.light", borderRadius: 2, p: 2 }}>
-        <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
+        <Stack direction="row" spacing={1} sx={{ alignItems: "center", mb: 1 }}>
           <CloseIcon sx={{ fontSize: 16, color: "error.main" }} />
           <Typography variant="caption" fontWeight={600} color="error.main" sx={{ textTransform: "uppercase", letterSpacing: 0.5 }}>
             What failed
@@ -31,7 +31,7 @@ export default function FailureCard({ failure, recovery }) {
 
       {recovery ? (
         <Box sx={{ bgcolor: "success.light", borderRadius: 2, p: 2 }}>
-          <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1 }}>
+          <Stack direction="row" spacing={1} sx={{ alignItems: "center", mb: 1 }}>
             <CheckIcon sx={{ fontSize: 16, color: "success.main" }} />
             <Typography variant="caption" fontWeight={600} color="success.main" sx={{ textTransform: "uppercase", letterSpacing: 0.5 }}>
               How it recovered

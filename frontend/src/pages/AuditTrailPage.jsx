@@ -22,7 +22,7 @@ function exportToCSV(decisions) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = `cartpilot-audit-log-${Date.now()}.csv`;
+  link.download = `commerce-studio-audit-log-${Date.now()}.csv`;
   link.click();
   URL.revokeObjectURL(url);
 }

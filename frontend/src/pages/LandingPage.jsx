@@ -1,5 +1,6 @@
-import { Box, Typography, Button, Stack, Chip } from "@mui/material";
-import { Link } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { Box, Typography, Stack, Chip } from "@mui/material";
+import { useNavigate } from "react-router-dom";
 import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome";
 import ArrowForwardIcon from "@mui/icons-material/ArrowForward";
 import MemoryIcon from "@mui/icons-material/Memory";
@@ -8,26 +9,71 @@ import DescriptionIcon from "@mui/icons-material/Description";
 import ChatBubbleOutlineIcon from "@mui/icons-material/ChatBubbleOutlineOutlined";
 import ShieldOutlinedIcon from "@mui/icons-material/ShieldOutlined";
 import LockOutlinedIcon from "@mui/icons-material/LockOutlined";
+import StorefrontOutlinedIcon from "@mui/icons-material/StorefrontOutlined";
+import PersonOutlineOutlinedIcon from "@mui/icons-material/PersonOutlineOutlined";
+
+import { ROLES, useRole } from "../context/RoleContext";
+import { API_BASE } from "../config";
 
 import heroVideo from "../assets/hero-bg.mp4";
 import heroPoster from "../assets/hero-poster.jpg";
 
 // Combined status + pillar items into one compact bottom strip
 // so everything fits in a single viewport without scrolling.
-const bottomStrip = [
+const buildStrip = (probeCount) => [
   { icon: <MemoryIcon sx={{ fontSize: 16 }} />, label: "Reasoning engine · Connected" },
   { icon: <CreditCardIcon sx={{ fontSize: 16 }} />, label: "Razorpay · Test mode" },
   { icon: <DescriptionIcon sx={{ fontSize: 16 }} />, label: "Audit log · Recording" },
   { icon: <ChatBubbleOutlineIcon sx={{ fontSize: 16 }} />, label: "Explainable" },
-  { icon: <ShieldOutlinedIcon sx={{ fontSize: 16 }} />, label: "Bounded" },
-  { icon: <LockOutlinedIcon sx={{ fontSize: 16 }} />, label: "Gated" },
+  {
+    icon: <ShieldOutlinedIcon sx={{ fontSize: 16 }} />,
+    // No number unless the suite answered for itself.
+    label: probeCount ? `Attack-tested · ${probeCount} probes` : "Attack-tested",
+  },
+  { icon: <LockOutlinedIcon sx={{ fontSize: 16 }} />, label: "Human-gated above the limit" },
 ];
 
 // Matches the AppBar's default MUI Toolbar height so the video
 // fills exactly the remaining viewport with zero page scroll.
 const NAVBAR_HEIGHT = 64;
 
+const ROLE_ICONS = {
+  customer: <PersonOutlineOutlinedIcon sx={{ fontSize: 20 }} />,
+  merchant: <StorefrontOutlinedIcon sx={{ fontSize: 20 }} />,
+};
+
 export default function LandingPage() {
+  const { setRole } = useRole();
+  const navigate = useNavigate();
+  const [probeCount, setProbeCount] = useState(null);
+
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/redteam/corpus`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (live) setProbeCount(data.count ?? null);
+      } catch {
+        // Backend down, or the page opened standalone. The strip simply
+        // makes the weaker claim.
+      }
+    })();
+    return () => { live = false; };
+  }, []);
+
+  const bottomStrip = buildStrip(probeCount);
+
+  // Picking a side is a decision, not a setting, so it gets two doors rather
+  // than a switch on one. It is also the honest shape of the thing: the buyer
+  // discovers the merchant over UCP as a separate party, and a control that
+  // implied one was a mode of the other would contradict the architecture.
+  const enter = (id) => {
+    setRole(id);
+    navigate(ROLES[id].home);
+  };
+
   return (
     <Box
       sx={{
@@ -97,7 +143,7 @@ export default function LandingPage() {
           variant="h1"
           sx={{ mb: 1.5, color: "#fff", textShadow: "0 2px 20px rgba(0,0,0,0.8)" }}
         >
-          An AI buyer with a conscience
+          A safety kernel for agent commerce
         </Typography>
 
         <Typography
@@ -110,23 +156,67 @@ export default function LandingPage() {
             textShadow: "0 1px 14px rgba(0,0,0,0.9)",
           }}
         >
-          Every purchase reasoned, every risk checked, every action logged.
-          A shopping agent that explains itself before it spends.
+          Agents can search, negotiate and pay here — through a gate they cannot
+          talk their way past. Both sides of the transaction are real, and every
+          bound is enforced in code that reads no seller's text.
         </Typography>
 
-        <Stack direction="row" spacing={2} sx={{ width: "100%", justifyContent: "center" }}>
-          <Button variant="contained" component={Link} to="/console" endIcon={<ArrowForwardIcon />}>
-            Open console
-          </Button>
-          <Button
-            variant="outlined"
-            component={Link}
-            to="/audit"
-            sx={{ borderColor: "rgba(255,255,255,0.6)", color: "#fff", backdropFilter: "blur(4px)" }}
-          >
-            View audit trail
-          </Button>
+        <Stack
+          direction={{ xs: "column", sm: "row" }}
+          spacing={2}
+          sx={{ justifyContent: "center", alignItems: "stretch", width: "100%", maxWidth: 720 }}
+        >
+          {Object.values(ROLES).map((option) => (
+            <Box
+              key={option.id}
+              component="button"
+              type="button"
+              onClick={() => enter(option.id)}
+              sx={{
+                flex: 1,
+                minWidth: 0,
+                textAlign: "left",
+                cursor: "pointer",
+                p: 2,
+                borderRadius: 2.5,
+                border: "1px solid rgba(255,255,255,0.22)",
+                bgcolor: "rgba(0,0,0,0.45)",
+                backdropFilter: "blur(8px)",
+                color: "#fff",
+                transition: "border-color 160ms, background-color 160ms, transform 160ms",
+                "&:hover": {
+                  borderColor: "rgba(255,255,255,0.5)",
+                  bgcolor: "rgba(0,0,0,0.58)",
+                  transform: "translateY(-2px)",
+                },
+              }}
+            >
+              <Stack direction="row" spacing={1} sx={{ alignItems: "center", mb: 0.75 }}>
+                <Box sx={{ display: "flex", color: "rgba(255,255,255,0.85)" }}>
+                  {ROLE_ICONS[option.id]}
+                </Box>
+                <Typography sx={{ fontWeight: 700, fontSize: 15, color: "#fff" }}>
+                  {option.tagline}
+                </Typography>
+                <ArrowForwardIcon sx={{ fontSize: 15, ml: "auto", opacity: 0.75 }} />
+              </Stack>
+              <Typography
+                variant="caption"
+                sx={{ color: "rgba(255,255,255,0.82)", lineHeight: 1.6, display: "block" }}
+              >
+                {option.blurb}
+              </Typography>
+            </Box>
+          ))}
         </Stack>
+
+        <Typography
+          variant="caption"
+          sx={{ mt: 2, color: "rgba(255,255,255,0.7)", textShadow: "0 1px 10px rgba(0,0,0,0.9)" }}
+        >
+          Both sides are real and talk to each other over UCP — discovery, catalogue and
+          checkout. You can switch at any time.
+        </Typography>
       </Box>
 
       {/* BOTTOM STRIP — compact, single row, replaces the two large sections
@@ -147,9 +237,9 @@ export default function LandingPage() {
           <Stack
             key={item.label}
             direction="row"
-            alignItems="center"
             spacing={0.75}
             sx={{
+              alignItems: "center",
               bgcolor: "rgba(0,0,0,0.45)",
               backdropFilter: "blur(6px)",
               color: "#fff",

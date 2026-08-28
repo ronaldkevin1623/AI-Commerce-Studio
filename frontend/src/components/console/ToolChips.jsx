@@ -13,10 +13,10 @@ function ToolRow({ icon, label, chip, detail, isOpen, onToggle }) {
     <Box>
       <Stack
         direction="row"
-        alignItems="center"
         spacing={1}
         onClick={onToggle}
         sx={{
+          alignItems: "center",
           cursor: "pointer",
           borderRadius: 1.5,
           px: 0.75,
@@ -109,10 +109,9 @@ export default function ToolChips({ candidates, product, riskGate, orderInfo }) 
     <Box>
       <Stack
         direction="row"
-        alignItems="center"
         spacing={0.75}
         onClick={() => setSummaryOpen((o) => !o)}
-        sx={{ cursor: "pointer", mb: 1, userSelect: "none" }}
+        sx={{ alignItems: "center", cursor: "pointer", mb: 1, userSelect: "none" }}
       >
         <Typography variant="overline" color="text.secondary" sx={{ letterSpacing: 1 }}>
           {rows.length} tool calls
@@ -142,7 +141,7 @@ export default function ToolChips({ candidates, product, riskGate, orderInfo }) 
           ))}
         </Stack>
 
-        <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap sx={{ pt: 1, borderTop: "1px solid", borderColor: "divider" }}>
+        <Stack direction="row" spacing={1} useFlexGap sx={{ flexWrap: "wrap", pt: 1, borderTop: "1px solid", borderColor: "divider" }}>
           {product && (
             <Tooltip title={`${product.name} · ₹${(product.price_paise / 100).toLocaleString("en-IN")}`} arrow>
               <Box sx={{ bgcolor: "background.default", border: "1px solid", borderColor: "divider", borderRadius: 999, px: 1.25, py: 0.4, cursor: "default" }}>

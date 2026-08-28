@@ -30,7 +30,7 @@ export default function LoadingState({ label = "Thinking", active = true }) {
   const elapsed = useElapsed(active);
 
   return (
-    <Stack direction="row" alignItems="center" spacing={1.25}>
+    <Stack direction="row" spacing={1.25} sx={{ alignItems: "center" }}>
       <Box sx={{ display: "grid", gridTemplateColumns: "repeat(3, 4px)", gap: "1.5px" }}>
         {CHEVRON_DELAYS.map((delay, i) => (
           <Box
@@ -39,9 +39,9 @@ export default function LoadingState({ label = "Thinking", active = true }) {
               width: 4,
               height: 4,
               borderRadius: "1px",
-              bgcolor: "primary.light",
+              bgcolor: "text.secondary",
               opacity: 0.15,
-              animation: active ? `cartpilot-pixel-on 650ms ease-in-out ${delay}ms infinite` : "none",
+              animation: active ? `commerce-studio-pixel-on 650ms ease-in-out ${delay}ms infinite` : "none",
             }}
           />
         ))}
@@ -56,7 +56,7 @@ export default function LoadingState({ label = "Thinking", active = true }) {
           backgroundClip: "text",
           WebkitBackgroundClip: "text",
           color: "transparent",
-          animation: active ? "cartpilot-shimmer 1.4s linear infinite" : "none",
+          animation: active ? "commerce-studio-shimmer 1.4s linear infinite" : "none",
         }}
       >
         {label}
@@ -67,11 +67,11 @@ export default function LoadingState({ label = "Thinking", active = true }) {
       </Typography>
 
       <style>{`
-        @keyframes cartpilot-pixel-on {
+        @keyframes commerce-studio-pixel-on {
           0%, 100% { opacity: 0.15; }
           50% { opacity: 1; }
         }
-        @keyframes cartpilot-shimmer {
+        @keyframes commerce-studio-shimmer {
           0% { background-position: 200% 0; }
           100% { background-position: -200% 0; }
         }

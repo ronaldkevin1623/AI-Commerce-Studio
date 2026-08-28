@@ -1,0 +1,244 @@
+/**
+ * The hive topology — one source of truth for every node the canvas draws.
+ *
+ * HONESTY RULE: `state` here is not decoration. "live" means the agent is
+ * wired and runs against real services today; "planned" means it does not
+ * exist yet and the canvas says so, in dashed outline, with "Not built yet"
+ * in its detail panel. Nothing on this canvas claims capability the
+ * codebase doesn't have — a graph that flatters the project is worth less
+ * than one a judge can trust.
+ */
+
+export const TIER = { YOU: 0, HIVE: 1, CLUSTER: 2, SPECIALIST: 3, TOOL: 4 };
+
+/** Tier 4 — the external services agents actually call. */
+export const TOOLS = [
+  {
+    id: "ollama",
+    label: "Ollama",
+    what: "Local LLM inference, qwen2.5:7b. Runs on this machine — no API key, no cloud round-trip, no per-token cost.",
+  },
+  {
+    id: "ebay",
+    label: "eBay Browse API",
+    what: "OAuth2 client-credentials, item_summary/search. Production keyset, free tier. EBAY_US marketplace — India isn't supported by Browse, so prices are converted at a fixed approximate rate.",
+  },
+  {
+    id: "firestore",
+    label: "Firestore",
+    what: "Firebase free tier. Collections: customers, decisions, orders, refunds. Every gated financial action is written here.",
+  },
+  {
+    id: "razorpay",
+    label: "Razorpay",
+    what: "Test mode. Orders API, Checkout.js, Payments API, Refunds API.",
+  },
+];
+
+/** Tier 2 — the three halves of the product, each a surface you can enter. */
+export const CLUSTERS = [
+  {
+    id: "buyer",
+    label: "Buyer Hive",
+    glyph: "◉",
+    route: "/console",
+    state: "live",
+    what: "The AI buyer. Takes a free-text request, finds real listings, screens them, recommends one, gates the purchase, and pays.",
+  },
+  {
+    id: "growth",
+    label: "Growth Hive",
+    glyph: "◈",
+    route: "/merchant",
+    state: "partial",
+    what: "The merchant half of the track: reads the decisions already in Firestore and turns them into revenue actions. Insights is built; recovery and offers are not.",
+  },
+  {
+    id: "aftercare",
+    label: "Post-Purchase",
+    glyph: "◍",
+    route: "/recovery",
+    state: "partial",
+    what: "What happens around and after the transaction — talking to sellers, refunds, and watching prices.",
+  },
+];
+
+/**
+ * Tier 3 — the specialists. `tools` lists the services each one really
+ * touches; Trust deliberately has none, because it is pure statistics over
+ * data Scout already fetched. Inventing an edge there to make the diagram
+ * look fuller would be exactly the kind of lie this project refuses.
+ */
+export const SPECIALISTS = [
+  // ── Buyer ────────────────────────────────────────────────────────────
+  {
+    id: "intent",
+    label: "Intent",
+    glyph: "◈",
+    cluster: "buyer",
+    state: "live",
+    tools: ["ollama"],
+    what: "Parses free text into structured constraints: category, max price in paise, and what the person cares most about.",
+    op: "ollama.chat → strict JSON {category, max_price_paise, priority}",
+  },
+  {
+    id: "scout",
+    label: "Scout",
+    glyph: "◎",
+    cluster: "buyer",
+    state: "live",
+    tools: ["ebay"],
+    what: "Searches real live eBay listings under the parsed budget and normalises them into one shape the rest of the pipeline expects.",
+    op: "GET buy/browse/v1/item_summary/search",
+  },
+  {
+    id: "trust",
+    label: "Trust",
+    glyph: "◇",
+    cluster: "buyer",
+    state: "live",
+    tools: [],
+    what: "Screens listings before ranking, so a suspect item never becomes the recommendation. Three real signals: price outliers against the set median, seller feedback percentage, and risky condition strings.",
+    op: "Pure statistics over Scout's results — no tool call, no LLM",
+  },
+  {
+    id: "value",
+    label: "Value",
+    glyph: "◆",
+    cluster: "buyer",
+    state: "live",
+    tools: ["ollama"],
+    what: "Ranks the listings that survived Trust and explains the pick in one sentence.",
+    op: "ollama.chat → {chosen_id, reason}",
+  },
+  {
+    id: "budget",
+    label: "Budget",
+    glyph: "▤",
+    cluster: "buyer",
+    state: "live",
+    tools: ["firestore"],
+    what: "Judges the running total, not the single order — cumulative spend against a session ceiling read from the customer record.",
+    op: "customers/{id}.total_spend_paise vs session ceiling",
+  },
+  {
+    id: "risk",
+    label: "Risk",
+    glyph: "⬡",
+    cluster: "buyer",
+    state: "live",
+    tools: ["firestore"],
+    what: "The gate every purchase passes before any Razorpay call: stock, duplicate window, trust score, and the per-order spending bound. Returns allowed, escalated, or blocked.",
+    op: "Writes the verdict + reason to decisions/",
+  },
+  {
+    id: "payment",
+    label: "Payment",
+    glyph: "▣",
+    cluster: "buyer",
+    state: "live",
+    tools: ["razorpay", "firestore"],
+    what: "Creates the real Razorpay order once the gate allows it, saves it, and hands the order id to Checkout.js.",
+    op: "POST /v1/orders → orders/{receipt}",
+  },
+
+  // ── Growth ───────────────────────────────────────────────────────────
+  {
+    id: "insights",
+    label: "Insights",
+    glyph: "▦",
+    cluster: "growth",
+    state: "live",
+    tools: ["firestore"],
+    what: "Abandonment rate by stage, block reasons, funnel drop-off, and the real price and discount spread of every listing AI Commerce Studio has searched — all derived from logged rows, none estimated.",
+    op: "GET /growth-insights over decisions, orders, refunds, market_scans",
+  },
+  {
+    id: "recovery",
+    label: "Cart Recovery",
+    glyph: "↺",
+    cluster: "growth",
+    state: "planned",
+    tools: ["firestore", "ollama", "razorpay"],
+    what: "Reads real run_abandoned decisions, drafts a recovery nudge, and issues a genuine Razorpay Payment Link so the abandoned cart can still convert.",
+    op: "Not built yet",
+  },
+  {
+    id: "offer",
+    label: "Offer",
+    glyph: "%",
+    cluster: "growth",
+    state: "planned",
+    tools: ["firestore"],
+    what: "Tests whether discounted listings actually convert better in this project's own order history, and sizes a discount from that evidence rather than a guess.",
+    op: "Not built yet",
+  },
+
+  // ── Post-purchase ────────────────────────────────────────────────────
+  {
+    id: "negotiator",
+    label: "Negotiator",
+    glyph: "✉",
+    cluster: "aftercare",
+    state: "live",
+    tools: ["ollama", "firestore"],
+    what: "Drafts a real message to the seller — grounded in that listing's actual price, condition, seller feedback and whatever Trust flagged on it. AI Commerce Studio cannot send on your behalf: eBay's Browse API is read-only and messaging needs the Sell API plus your own account OAuth. So it writes the message and hands you the listing's contact link.",
+    op: "ollama.chat → draft, logged to decisions/",
+  },
+  {
+    id: "refund",
+    label: "Refund",
+    glyph: "⤺",
+    cluster: "aftercare",
+    state: "live",
+    tools: ["razorpay", "firestore"],
+    what: "Issues a real Razorpay refund against a captured payment and logs it.",
+    op: "POST /v1/payments/{id}/refund → refunds/",
+  },
+  {
+    id: "pricewatch",
+    label: "Price Watch",
+    glyph: "◷",
+    cluster: "aftercare",
+    state: "planned",
+    tools: ["ebay", "firestore"],
+    what: "Re-queries eBay for an item already ordered and compares today's price against the price recorded at order time.",
+    op: "Not built yet",
+  },
+];
+
+/**
+ * Human wording for enum setting values, scoped per node — the same raw
+ * value means different things in different places. "price" on Value is
+ * "rank by lowest price"; "price" on Negotiator is "ask the seller for a
+ * better one". A single flat map got that wrong.
+ */
+export const ENUM_LABELS = {
+  value: {
+    auto: "Auto — from request",
+    discount: "Biggest discount",
+    price: "Lowest price",
+    rating: "Best rated",
+    delivery_days: "Fastest delivery",
+  },
+  negotiator: {
+    condition: "Condition",
+    authenticity: "Proof it's genuine",
+    price: "A better price",
+    shipping: "Shipping",
+  },
+};
+
+export function enumLabel(node, value) {
+  if (typeof value === "boolean") return value ? "On" : "Off";
+  return ENUM_LABELS[node]?.[value] ?? value;
+}
+
+export const BY_ID = Object.fromEntries(
+  [...CLUSTERS, ...SPECIALISTS, ...TOOLS].map((n) => [n.id, n])
+);
+
+/** Which specialists depend on a given tool — read straight off the graph. */
+export function dependentsOf(toolId) {
+  return SPECIALISTS.filter((s) => s.tools?.includes(toolId));
+}

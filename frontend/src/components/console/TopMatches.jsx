@@ -85,11 +85,11 @@ export default function TopMatches({ candidates, chosenId }) {
                 },
               }}
             >
-              <Stack direction="row" alignItems="center" spacing={1.25}>
+              <Stack direction="row" spacing={1.25} sx={{ alignItems: "center" }}>
                 <Thumbnail imageUrl={product.image} />
 
                 <Box sx={{ minWidth: 0, flex: 1 }}>
-                  <Stack direction="row" alignItems="center" spacing={0.75}>
+                  <Stack direction="row" spacing={0.75} sx={{ alignItems: "center" }}>
                     <Typography
                       variant="body2"
                       fontWeight={isChosen ? 700 : 500}
@@ -118,7 +118,7 @@ export default function TopMatches({ candidates, chosenId }) {
                       />
                     )}
                   </Stack>
-                  <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 0.25 }}>
+                  <Stack direction="row" spacing={1} sx={{ alignItems: "center", mt: 0.25 }}>
                     <Typography variant="caption" color="text.secondary" fontWeight={600}>
                       ₹{(product.price_paise / 100).toLocaleString("en-IN")}
                     </Typography>
@@ -132,7 +132,7 @@ export default function TopMatches({ candidates, chosenId }) {
                       </Typography>
                     )}
                     {product.rating != null && (
-                      <Stack direction="row" alignItems="center" spacing={0.25}>
+                      <Stack direction="row" spacing={0.25} sx={{ alignItems: "center" }}>
                         <StarIcon sx={{ fontSize: 12, color: "warning.main" }} />
                         <Typography variant="caption" color="text.secondary">
                           {product.rating}

@@ -16,6 +16,12 @@ FIREBASE_CREDENTIALS_PATH = os.getenv("FIREBASE_CREDENTIALS_PATH", "./serviceAcc
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:7b")
 
+# Where AI Commerce Studio looks for a UCP merchant. Defaults to this same process,
+# because the demo store ships with the project — but it is a URL, not an
+# import, so pointing it at another UCP store is a config change and not a
+# code change.
+MERCHANT_BASE_URL = os.getenv("MERCHANT_BASE_URL", "http://127.0.0.1:8010")
+
 EBAY_CLIENT_ID = os.getenv("EBAY_CLIENT_ID")
 EBAY_CLIENT_SECRET = os.getenv("EBAY_CLIENT_SECRET")
 

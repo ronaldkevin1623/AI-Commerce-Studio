@@ -36,18 +36,65 @@ FALLBACK_CATALOG = [
 ]
 
 
-def search_catalog(category: str, max_price_paise: int) -> list[dict]:
+def search_catalog(category: str, max_price_paise: int, sort: str = None,
+                   requirements: list = None) -> list[dict]:
+    """
+    Every venue the agent can see, in one list.
+
+    eBay is where the selection is; the UCP merchant is the one venue this
+    agent can actually pay. Both are searched, both are returned in the same
+    shape, and every downstream stage — trust, ranking, the risk gate,
+    the mandate chain — treats them identically. The `source` field is the
+    only thing that differs, and it exists so checkout knows who to talk to.
+
+    A merchant that is unreachable costs the run a few options and nothing
+    else; eBay being down likewise. The run only fails if neither answers.
+    """
+    listings = _search_ebay(category, max_price_paise, sort)
+    for item in listings:
+        item.setdefault("source", "ebay")
+
+    # Resolve variation groups to the option actually requested. Done here,
+    # before trust and ranking, so every stage downstream reasons about the
+    # price that would really be charged rather than a group representative.
+    try:
+        from app.agent.ebay_client import resolve_variants
+        listings = resolve_variants(listings, category, requirements)
+        # A resolved price can land above the ceiling — the ten-pack that was
+        # inside budget is not the same purchase as the single unit.
+        if max_price_paise:
+            listings = [i for i in listings
+                        if (i.get("price_paise") or 0) <= max_price_paise]
+    except Exception as exc:
+        print(f"[catalog] variant resolution skipped: {exc}", flush=True)
+
+    # Searched second and merged rather than replacing anything: the store is
+    # six products, and letting it crowd out a real marketplace would be
+    # dressing up a demo as a selection.
+    try:
+        from app.agent import merchant_client
+        listings += merchant_client.search(category, max_price_paise)
+    except Exception as exc:
+        print(f"[catalog] UCP merchant search skipped: {exc}", flush=True)
+
+    return listings
+
+
+def _search_ebay(category: str, max_price_paise: int, sort: str = None) -> list[dict]:
     if EBAY_CLIENT_ID and EBAY_CLIENT_SECRET:
         try:
             from app.agent.ebay_client import search_live_catalog
-            results = search_live_catalog(query=category, max_price_paise=max_price_paise)
+            results = search_live_catalog(query=category, max_price_paise=max_price_paise, sort=sort)
             results = [r for r in results if r["price_paise"] > 0]
             if results:
                 return results
         except Exception as e:
-            print(f"[catalog] eBay search failed, falling back to static catalog: {e}")
+            print(f"[catalog] eBay search failed, falling back to static catalog: {e}", flush=True)
 
-    return [
-        p for p in FALLBACK_CATALOG
-        if p["category"] == category and p["price_paise"] <= max_price_paise
-    ]
+    # Fallback only covers earbuds. Matching loosely so "wireless earbuds"
+    # or "earbud" still hit it, but anything else honestly returns nothing
+    # rather than showing unrelated products.
+    if "earbud" not in category.lower() and "earphone" not in category.lower():
+        return []
+
+    return [p for p in FALLBACK_CATALOG if p["price_paise"] <= max_price_paise]

@@ -39,7 +39,7 @@ export default function RecoveryTimeline({ failure, recovery }) {
       <Stack spacing={0}>
         {steps.map((step, i) => (
           <Stack key={i} direction="row" spacing={1.5}>
-            <Stack alignItems="center">
+            <Stack sx={{ alignItems: "center" }}>
               {step.icon}
               {i < steps.length - 1 && (
                 <Box sx={{ width: "1px", flex: 1, minHeight: 20, bgcolor: "divider", my: 0.5 }} />

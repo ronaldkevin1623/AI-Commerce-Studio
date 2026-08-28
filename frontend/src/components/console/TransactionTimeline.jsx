@@ -31,7 +31,7 @@ export default function TransactionTimeline({ completedKeys = new Set(), activeK
           const done = completedKeys.has(step.key);
           const active = activeKey === step.key;
           return (
-            <Stack key={step.key} direction="row" alignItems="center" spacing={1}>
+            <Stack key={step.key} direction="row" spacing={1} sx={{ alignItems: "center" }}>
               {done ? (
                 <CheckCircleIcon sx={{ fontSize: 17, color: "success.main" }} />
               ) : active ? (
@@ -51,8 +51,8 @@ export default function TransactionTimeline({ completedKeys = new Set(), activeK
       </Stack>
 
       <style>{`
-        .spin { animation: cartpilot-spin 1s linear infinite; }
-        @keyframes cartpilot-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        .spin { animation: commerce-studio-spin 1s linear infinite; }
+        @keyframes commerce-studio-spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
       `}</style>
     </Box>
   );

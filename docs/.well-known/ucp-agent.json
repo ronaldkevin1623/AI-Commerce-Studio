@@ -1,0 +1,20 @@
+{
+  "ucp_agent": {
+    "version": "2026-04-08",
+    "name": "AI Commerce Studio",
+    "description": "A buyer-side shopping agent. Searches live listings, screens them, and gates every purchase behind bounded checks, human approval for anything escalated, and a signed AP2 mandate chain.",
+    "homepage": "https://github.com/ronaldkevin1623/AI Commerce Studio",
+    "capabilities": [
+      "dev.ucp.shopping.catalog.search",
+      "dev.ucp.shopping.catalog.lookup"
+    ],
+    "signing_keys": {
+      "algorithm": "ES256",
+      "jwks_uri": "https://ronaldkevin1623.github.io/AI Commerce Studio/.well-known/jwks.json",
+      "kid": "29c353ba5e352290d1284dbf940e1bff"
+    },
+    "contact": {
+      "issues": "https://github.com/ronaldkevin1623/AI Commerce Studio/issues"
+    }
+  }
+}

@@ -1,28 +1,26 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Box, TextField, IconButton, Stack, Typography } from "@mui/material";
-import SendIcon from "@mui/icons-material/ArrowForward";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Box, Stack, Typography } from "@mui/material";
+import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
-import ErrorOutlineIcon from "@mui/icons-material/ErrorOutline";
+import ErrorOutlineIcon from "@mui/icons-material/ErrorOutlineOutlined";
 
-import { useAgentSocket } from "../hooks/useAgentSocket";
-import PageBanner from "../components/shared/PageBanner";
-import ReasoningStream from "../components/console/ReasoningStream";
-import RiskGateIndicator from "../components/console/RiskGateIndicator";
-import TopMatches from "../components/console/TopMatches";
-import TransactionTimeline from "../components/console/TransactionTimeline";
-import ToolChips from "../components/console/ToolChips";
-import EscalationBanner from "../components/console/EscalationBanner";
+import { useConversation } from "../context/ConversationContext";
+import ChatSidebar from "../components/console/ChatSidebar";
+import { useRole } from "../context/RoleContext";
+import ConversationTurn from "../components/console/ConversationTurn";
+import ClarifyCard from "../components/console/ClarifyCard";
+import PromptBar from "../components/console/PromptBar";
+import AbandonRunDialog from "../components/console/AbandonRunDialog";
+import ProductDetailDrawer from "../components/console/ProductDetailDrawer";
+import CheckoutSheet from "../components/console/CheckoutSheet";
+import OrderConfirmation from "../components/console/OrderConfirmation";
+import CartPanel from "../components/console/CartPanel";
+import { API_BASE, RAZORPAY_KEY_ID } from "../config";
 
-const API_BASE = "http://localhost:8000";
-const RAZORPAY_KEY_ID = import.meta.env.VITE_RAZORPAY_KEY_ID;
-
-const cardSx = {
-  bgcolor: "background.paper",
-  border: "1px solid",
-  borderColor: "divider",
-  borderRadius: 2.5,
-  p: 2.5,
-};
+// One column width for the whole console. The transcript used to be 900px
+// wide while the composer sat at 680 and the empty-state composer at 640, so
+// the thing you type into never lined up with the thing you'd just read.
+const COLUMN = 820;
 
 function PaymentStatusBanner({ status }) {
   if (!status) return null;
@@ -37,7 +35,7 @@ function PaymentStatusBanner({ status }) {
         py: 0.85,
         borderRadius: 999,
         bgcolor: isConfirmed ? "rgba(34,197,94,0.12)" : "rgba(239,68,68,0.12)",
-        mb: 2.5,
+        mb: 2,
       }}
     >
       {isConfirmed ? (
@@ -52,79 +50,92 @@ function PaymentStatusBanner({ status }) {
   );
 }
 
-function deriveState(events) {
-  let product = null;
-  let candidates = [];
-  let riskGate = { state: "idle", reason: null };
-  let orderInfo = null;
-  const completedKeys = new Set();
-  let activeKey = null;
-
-  for (const event of events) {
-    if (event.type === "step") {
-      if (event.payload.toLowerCase().includes("parsing intent")) activeKey = "intent";
-      if (event.payload.toLowerCase().includes("matching")) activeKey = "match";
-      if (event.payload.toLowerCase().includes("ranking")) activeKey = "match";
-      if (event.payload.toLowerCase().includes("risk check")) activeKey = "risk_gate";
-      if (event.payload.toLowerCase().includes("creating razorpay")) activeKey = "order_created";
-    }
-    if (event.type === "candidates") {
-      candidates = event.payload;
-    }
-    if (event.type === "match") {
-      product = event.payload.product;
-      completedKeys.add("intent");
-      completedKeys.add("match");
-    }
-    if (event.type === "risk_gate") {
-      riskGate = { state: event.payload.decision, reason: event.payload.reason };
-      if (event.payload.decision === "allowed") completedKeys.add("risk_gate");
-    }
-    if (event.type === "order_created") {
-      orderInfo = event.payload;
-      completedKeys.add("risk_gate");
-      completedKeys.add("order_created");
-      activeKey = "order_created";
-    }
-  }
-
-  return { product, candidates, riskGate, orderInfo, completedKeys, activeKey };
-}
-
 export default function AgentConsolePage() {
-  const [input, setInput] = useState("");
-  const [paymentStatus, setPaymentStatus] = useState(null); // null | "confirmed" | "failed"
   const checkoutTriggeredRef = useRef(false);
+  const transcriptEndRef = useRef(null);
 
-  const { events, isRunning, pendingApproval, sendIntent, respondToEscalation } = useAgentSocket();
+  const { role } = useRole();
+  const sidebarLayout = Boolean(role);
 
-  const { product, candidates, riskGate, orderInfo, completedKeys, activeKey } = useMemo(
-    () => deriveState(events),
-    [events]
-  );
+  const [drawerProduct, setDrawerProduct] = useState(null);
+  const [drawerAlternatives, setDrawerAlternatives] = useState([]);
+  const [checkoutOpen, setCheckoutOpen] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [deliveryLocation, setDeliveryLocation] = useState(null);
+  const [paymentRef, setPaymentRef] = useState(null);
+  // The listing being bought. Kept because order_created only carries the
+  // amount and a name — the delivery estimate, postage and image all live on
+  // the product, and the checkout sheet needs them.
+  const [purchasedProduct, setPurchasedProduct] = useState(null);
+  // A cart checkout creates its own order outside the WebSocket run, so it
+  // can't come from the order_created event like a single purchase does.
+  const [cartOrder, setCartOrder] = useState(null);
 
-  const handleSend = () => {
-    checkoutTriggeredRef.current = false;
-    setPaymentStatus(null);
-    if (input.trim()) sendIntent(input.trim());
+  const {
+    events,
+    isRunning,
+    pendingApproval,
+    pendingSelection,
+    clarify,
+    answerClarify,
+    selectProduct,
+    respondToEscalation,
+    transcript,
+    sessionList,
+    activeSessionId,
+    paymentStatus,
+    setPaymentStatus,
+    sidebarCollapsed,
+    setSidebarCollapsed,
+    startRun,
+    newChat,
+    openSession,
+    runStage,
+    abandonPrompt,
+    continueRun,
+    terminateRun,
+  } = useConversation();
+
+  useEffect(() => {
+    transcriptEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [events, transcript]);
+
+  // Only block the composer while the agent is genuinely mid-thought. A run
+  // paused at the product picker keeps its socket open, and treating that as
+  // "busy" left no way to ask for anything else.
+  const busyThinking = isRunning && !pendingSelection && !pendingApproval;
+
+  const handleSend = (text) => {
+    const started = startRun(text);
+    if (started) checkoutTriggeredRef.current = false;
   };
 
-  // The moment a real Razorpay order exists, open the real Checkout.js
-  // popup — this is the actual payment step, not a simulation.
-  useEffect(() => {
-    if (!orderInfo || checkoutTriggeredRef.current) return;
-    checkoutTriggeredRef.current = true;
+  const handleNewChat = () => {
+    checkoutTriggeredRef.current = false;
+    newChat();
+  };
+
+
+  const orderInfo = useMemo(() => {
+    if (cartOrder) return cartOrder;
+    const orderEvent = events.find((e) => e.type === "order_created");
+    return orderEvent ? orderEvent.payload : null;
+  }, [events, cartOrder]);
+
+  // Extracted so both the automatic open and the "Retry payment"
+  // button reuse exactly the same real Razorpay checkout flow.
+  const openCheckout = useCallback((order) => {
+    if (!order) return;
+    setPaymentStatus(null);
 
     const options = {
       key: RAZORPAY_KEY_ID,
-      amount: orderInfo.amount_paise,
+      amount: order.amount_paise,
       currency: "INR",
-      name: "CartPilot",
-      description: orderInfo.product_name,
-      order_id: orderInfo.razorpay_order_id,
+      name: "AI Commerce Studio",
+      description: order.product_name,
+      order_id: order.razorpay_order_id,
       handler: async (response) => {
-        // response contains real Razorpay fields: razorpay_payment_id,
-        // razorpay_order_id, razorpay_signature
         try {
           const res = await fetch(`${API_BASE}/verify-payment`, {
             method: "POST",
@@ -132,97 +143,263 @@ export default function AgentConsolePage() {
             body: JSON.stringify({
               razorpay_payment_id: response.razorpay_payment_id,
               razorpay_order_id: response.razorpay_order_id,
-              customer_id: orderInfo.customer_id,
+              customer_id: order.customer_id,
             }),
           });
+          setPaymentRef(response);
           setPaymentStatus(res.ok ? "confirmed" : "failed");
         } catch {
           setPaymentStatus("failed");
         }
       },
-      modal: {
-        // If the user closes the popup without paying, reflect that honestly
-        ondismiss: () => setPaymentStatus("failed"),
-      },
-      theme: { color: "#3B82F6" },
+      modal: { ondismiss: () => setPaymentStatus("failed") },
+      theme: { color: "#ECECEE" },
     };
 
-    const rzp = new window.Razorpay(options);
-    rzp.open();
+    new window.Razorpay(options).open();
+  }, []);
+
+  // Re-pick after a failed payment: the agent's socket is closed, so a
+  // fresh order is created over REST (server-side risk gate still runs).
+  const handleRepick = useCallback(async (product) => {
+    setPurchasedProduct(product);
+    try {
+      const res = await fetch(`${API_BASE}/repick-order`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ product }),
+      });
+      if (!res.ok) {
+        setPaymentStatus("failed");
+        return;
+      }
+      const newOrder = await res.json();
+      openCheckout(newOrder);
+    } catch {
+      setPaymentStatus("failed");
+    }
+  }, [openCheckout]);
+
+  // Once the gate has allowed the order, show the checkout sheet rather than
+  // throwing Razorpay's modal straight at the person. The delivery address
+  // is collected here, and "Pay now" is what opens Razorpay — so the charge
+  // is always a deliberate second action, not a popup that appeared.
+  useEffect(() => {
+    if (!orderInfo || checkoutTriggeredRef.current) return;
+    checkoutTriggeredRef.current = true;
+    setCheckoutOpen(true);
   }, [orderInfo]);
 
-  const timelineKeys = useMemo(() => {
-    const keys = new Set(completedKeys);
-    if (paymentStatus === "confirmed") keys.add("payment_confirmed");
-    return keys;
-  }, [completedKeys, paymentStatus]);
+  // Payment confirmed — swap the sheet for the receipt.
+  useEffect(() => {
+    if (paymentStatus === "confirmed") {
+      setCheckoutOpen(false);
+      setConfirmOpen(true);
+    }
+  }, [paymentStatus]);
 
-  const timelineActiveKey = paymentStatus === "confirmed" ? null : activeKey;
+  const handleSelectProduct = useCallback(
+    (product) => {
+      setPurchasedProduct(product);
+      selectProduct(product.id);
+    },
+    [selectProduct]
+  );
+
+  const handleOpenProduct = useCallback((product, all) => {
+    setDrawerProduct(product);
+    setDrawerAlternatives((all ?? []).filter((c) => String(c.id) !== String(product.id)));
+  }, []);
+
+  const handlePay = useCallback(
+    (location) => {
+      setDeliveryLocation(location);
+      openCheckout(orderInfo);
+    },
+    [openCheckout, orderInfo]
+  );
 
   return (
-    <Box>
-      <PageBanner
-        title="Agent console"
-        subtitle="Give the agent a task and watch it reason, check itself, and spend"
+    <Box sx={{ display: "flex", height: "100%", minHeight: 0 }}>
+      {/* The app shell already carries a sidebar with conversation history
+          in it, so this second panel would be two nested lists of the same
+          chats side by side. It stays for the roleless case only. */}
+      {!sidebarLayout && (
+        <ChatSidebar
+          turns={sessionList}
+          activeId={activeSessionId}
+          onSelect={openSession}
+          onNewChat={handleNewChat}
+          collapsed={sidebarCollapsed}
+          onToggleCollapse={() => setSidebarCollapsed((c) => !c)}
+        />
+      )}
+
+      <Box sx={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
+        {/* Empty state: greeting and composer centred in the viewport,
+            so a fresh session feels like an invitation rather than a
+            blank page with a toolbar stuck to the bottom. */}
+        {transcript.length === 0 ? (
+          <Box
+            sx={{
+              flex: 1,
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              justifyContent: "center",
+              px: 3,
+              pb: 8,
+            }}
+          >
+            <Stack direction="row" spacing={1.5} sx={{ alignItems: "center", mb: 3 }}>
+              <AutoAwesomeIcon sx={{ fontSize: 26, color: "primary.light" }} />
+              <Typography variant="h1" sx={{ fontSize: 30, fontWeight: 500 }}>
+                What should I buy for you?
+              </Typography>
+            </Stack>
+
+            <Box sx={{ width: "100%", maxWidth: COLUMN }}>
+              <PromptBar onSend={handleSend} disabled={busyThinking} tall />
+            </Box>
+
+            <Typography variant="caption" color="text.secondary" sx={{ mt: 2.5 }}>
+              Try "wireless earbuds under ₹2000, fast delivery" — or type / for templates
+            </Typography>
+          </Box>
+        ) : (
+        <Box
+          sx={{
+            flex: 1,
+            overflowY: "auto",
+            px: 3,
+            py: 3,
+            // Reserving the scrollbar gutter on both edges keeps the centred
+            // column centred. Without it the scrollbar eats 8px from one side
+            // only, and the transcript sits 4px left of the composer below it.
+            scrollbarGutter: "stable both-edges",
+          }}
+        >
+          <Box sx={{ maxWidth: COLUMN, mx: "auto" }}>
+            {transcript.map((turn) => (
+              <Box key={turn.id} id={`turn-${turn.id}`}>
+                <ConversationTurn
+                  turn={turn}
+                  isLive={turn.id === "live"}
+                  isRunning={isRunning}
+                  pendingApproval={turn.id === "live" && pendingApproval}
+                  pendingSelection={turn.id === "live" && pendingSelection}
+                  onSelectProduct={handleSelectProduct}
+                  onApprove={() => respondToEscalation(true)}
+                  onDeny={() => respondToEscalation(false)}
+                  paymentStatus={turn.id === "live" ? paymentStatus : null}
+                  onRetryPayment={() => openCheckout(orderInfo)}
+                  onRepick={handleRepick}
+                  onOpenProduct={handleOpenProduct}
+                />
+              </Box>
+            ))}
+            {/* The run is paused on the socket waiting for this, so it sits
+                at the foot of the transcript where the next thing to do
+                belongs. Skip answers it too — an unanswered question would
+                hold the pipeline open indefinitely. */}
+            {clarify && (
+              <ClarifyCard
+                questions={clarify.questions}
+                candidateCount={clarify.candidate_count}
+                onSubmit={answerClarify}
+                onSkip={() => answerClarify({})}
+              />
+            )}
+
+            <div ref={transcriptEndRef} />
+          </Box>
+        </Box>
+        )}
+
+        {/* Once a conversation exists the composer docks to the bottom.
+            No hard divider — just breathing room and a soft shadow. */}
+        {transcript.length > 0 && (
+        <Box sx={{ px: 3, pt: 1, pb: 3 }}>
+          <Box sx={{ maxWidth: COLUMN, mx: "auto" }}>
+            {paymentStatus === "confirmed" && (
+              <Box sx={{ mb: 1 }}>
+                <PaymentStatusBanner status={paymentStatus} />
+              </Box>
+            )}
+            <PromptBar onSend={handleSend} disabled={busyThinking} />
+          </Box>
+        </Box>
+        )}
+      </Box>
+
+      <AbandonRunDialog
+        open={abandonPrompt}
+        stage={runStage}
+        onContinue={continueRun}
+        onTerminate={terminateRun}
       />
 
-      <Box sx={{ maxWidth: 1000, mx: "auto", px: 3, py: 4 }}>
-        <Stack
-          direction="row"
-          spacing={1}
-          sx={{ bgcolor: "background.paper", border: "1px solid", borderColor: "divider", borderRadius: 2.5, p: 0.5, mb: 2.5 }}
-        >
-          <TextField
-            fullWidth
-            variant="standard"
-            placeholder="Wireless earbuds under ₹2000, fast delivery"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && handleSend()}
-            disabled={isRunning}
-            InputProps={{ disableUnderline: true, sx: { px: 1.5, py: 1 } }}
-          />
-          <IconButton color="primary" onClick={handleSend} disabled={isRunning || !input.trim()}>
-            <SendIcon />
-          </IconButton>
-        </Stack>
+      {/* A cart checkout produces the same shape of order as a single buy,
+          so it drops into the same sheet → Razorpay → confirmation path. */}
+      <CartPanel
+        onOrderCreated={(order, items) => {
+          setPurchasedProduct(items[0]);
+          checkoutTriggeredRef.current = true;
+          setCartOrder(order);
+          setCheckoutOpen(true);
+        }}
+      />
 
-        <PaymentStatusBanner status={paymentStatus} />
+      <ProductDetailDrawer
+        open={Boolean(drawerProduct)}
+        product={drawerProduct}
+        alternatives={drawerAlternatives}
+        query={transcript[transcript.length - 1]?.query}
+        onClose={() => setDrawerProduct(null)}
+        onSelectAlternative={(alt) => {
+          setDrawerAlternatives((prev) =>
+            [drawerProduct, ...prev].filter((c) => c && String(c.id) !== String(alt.id))
+          );
+          setDrawerProduct(alt);
+        }}
+        onBuyNow={(product) => {
+          setDrawerProduct(null);
+          if (pendingSelection) handleSelectProduct(product);
+          else handleRepick(product);
+        }}
+      />
 
-        <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", md: "1.4fr 1fr" }, gap: 3 }}>
-          <Box sx={cardSx}>
-            <ReasoningStream events={events} isRunning={isRunning} />
-          </Box>
+      <CheckoutSheet
+        open={checkoutOpen}
+        product={{
+          // The listing supplies delivery, postage and imagery; the order
+          // supplies the authoritative amount actually being charged.
+          ...(purchasedProduct ?? {}),
+          ...(orderInfo ?? {}),
+          name: orderInfo?.product_name ?? purchasedProduct?.name,
+          price_paise: orderInfo?.amount_paise ?? purchasedProduct?.price_paise,
+          image: purchasedProduct?.image,
+          shipping_cost_paise: purchasedProduct?.shipping_cost_paise,
+          delivery_estimate_from: purchasedProduct?.delivery_estimate_from,
+          delivery_estimate_to: purchasedProduct?.delivery_estimate_to,
+        }}
+        onClose={() => setCheckoutOpen(false)}
+        onPay={handlePay}
+        busy={false}
+        error={paymentStatus === "failed" ? "Payment didn't complete. Try Netbanking." : null}
+      />
 
-          {candidates.length > 0 && (
-            <Box sx={{ ...cardSx, mt: 2.5 }}>
-              <ToolChips candidates={candidates} product={product} riskGate={riskGate} orderInfo={orderInfo} />
-            </Box>
-          )}
-
-          <Stack spacing={2.5}>
-            <Box sx={cardSx}>
-              <RiskGateIndicator state={riskGate.state} reason={riskGate.reason} />
-              {pendingApproval && (
-                <Box sx={{ mt: 1.5 }}>
-                  <EscalationBanner
-                    onApprove={() => respondToEscalation(true)}
-                    onDeny={() => respondToEscalation(false)}
-                  />
-                </Box>
-              )}
-            </Box>
-
-            <Box sx={cardSx}>
-              <TopMatches candidates={candidates} chosenId={product?.id} />
-            </Box>
-
-            <Box sx={cardSx}>
-              <TransactionTimeline completedKeys={timelineKeys} activeKey={timelineActiveKey} />
-            </Box>
-          </Stack>
-        </Box>
-      </Box>
+      <OrderConfirmation
+        open={confirmOpen}
+        order={orderInfo ? { ...orderInfo, image: purchasedProduct?.image } : null}
+        payment={paymentRef}
+        location={deliveryLocation}
+        onClose={() => setConfirmOpen(false)}
+        onViewOrder={() => {
+          setConfirmOpen(false);
+          window.location.href = "/orders";
+        }}
+      />
     </Box>
   );
 }

@@ -81,7 +81,7 @@ export default function RiskGateIndicator({ state = "idle", reason }) {
 
   return (
     <Box sx={{ bgcolor: config.bg, borderRadius: 2, p: 2, transition: "background-color 0.3s" }}>
-      <Stack direction="row" spacing={1.5} alignItems="center">
+      <Stack direction="row" spacing={1.5} sx={{ alignItems: "center" }}>
         <LockIcon state={state} color={config.color} />
         <Box>
           <Typography variant="body2" fontWeight={700} sx={{ color: config.color }}>
