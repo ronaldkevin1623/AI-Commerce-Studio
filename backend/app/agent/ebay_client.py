@@ -169,8 +169,22 @@ def get_item(item_id: str, category: str = "") -> dict | None:
             int(float(original_raw) * usd_to_inr * 100) if original_raw else None
         ),
         "discount_percent": _percent(discount_raw),
-        "rating": round(float(feedback) / 20, 1) if feedback else 4.0,
+        # Genuine product reviews, when this listing is matched to an eBay
+        # catalogue product. Filled by enrich_reviews() for the shortlist;
+        # None here means "not looked up yet or none exist", never "bad".
+        "review_stars": None,
+        "review_count": None,
+        # Deliberately not a star score. A per-seller reputation cannot be
+        # converted into a per-product rating, and pretending otherwise put
+        # an invented 4.0 on every listing that had no feedback at all.
+        "rating": None,
         "seller_feedback": float(feedback) if feedback else None,
+        # How much that percentage is worth: 100% across 72 sales is a
+        # weaker claim than 99.8% across 400,000.
+        "seller_feedback_count": seller.get("feedbackScore"),
+        # eBay's own badge, awarded against their service criteria.
+        "top_rated_seller": bool(item.get("topRatedBuyingExperience")),
+        "condition_id": item.get("conditionId"),
         **_shipping(item, usd_to_inr),
         "stock": item.get("estimatedAvailabilities", [{}])[0].get("estimatedAvailableQuantity", 1)
         if item.get("estimatedAvailabilities") else 1,
@@ -194,8 +208,79 @@ def get_item(item_id: str, category: str = "") -> dict | None:
     }
 
 
+# Everything except 7000, "For parts or not working" — never something an
+# agent should buy on someone's behalf. Used when no preference is given to
+# a call that has no opinion; the shopper-facing default is new only, and it
+# lives in ollama_agent.condition_preference.
+_ALL_SELLABLE_CONDITIONS = {"1000", "1500", "1750", "2000", "2010", "2020",
+                            "2030", "2500", "3000", "4000", "5000", "6000"}
+
+
+def _normalise_summary(item: dict, usd_to_inr: int, category: str) -> dict:
+    """
+    One eBay item summary, in the shape the rest of the pipeline expects.
+
+    Lifted out of search_live_catalog so image-search results are identical
+    in shape to typed-search results. A second copy of this mapping would
+    drift, and the trust, quality and ranking stages all read these keys —
+    an image result that quietly lacked seller_feedback would be scored as
+    an unrated seller rather than as a field nobody filled in.
+    """
+    price_usd = float((item.get("price") or {}).get("value", 0))
+
+    seller = item.get("seller") or {}
+    feedback_pct = seller.get("feedbackPercentage")
+    # No star score is derived here. A seller's reputation percentage is not
+    # a product rating, and the old conversion also handed 4.0 to every
+    # listing that had no feedback at all.
+    seller_feedback = float(feedback_pct) if feedback_pct else None
+
+    marketing_price = item.get("marketingPrice") or {}
+    original_price_usd_raw = (marketing_price.get("originalPrice") or {}).get("value")
+    original_price_paise = (
+        int(float(original_price_usd_raw) * usd_to_inr * 100)
+        if original_price_usd_raw else None
+    )
+
+    return {
+        "id": item.get("itemId"),
+        "name": item.get("title"),
+        "category": category,
+        # A variation group's search price is one representative of the set,
+        # not the option being asked for. Carried through so the resolver
+        # can replace it with the real one.
+        "item_group_id": (
+            (item.get("itemGroupHref") or "").split("item_group_id=")[-1]
+            if item.get("itemGroupType") == "SELLER_DEFINED_VARIATIONS" else None
+        ),
+        "price_paise": int(price_usd * usd_to_inr * 100),
+        "original_price_paise": original_price_paise,
+        "discount_percent": _percent(marketing_price.get("discountPercentage")),
+        "rating": None,
+        "review_stars": None,
+        "review_count": None,
+        **_shipping(item, usd_to_inr),
+        "stock": 1,
+        "url": item.get("itemWebUrl"),
+        "image": (item.get("image") or {}).get("imageUrl"),
+        "condition": item.get("condition"),
+        "seller_feedback": seller_feedback,
+        "seller_feedback_count": seller.get("feedbackScore"),
+        "top_rated_seller": bool(item.get("topRatedBuyingExperience")),
+        "condition_id": item.get("conditionId"),
+        # Where the thing physically is. eBay returns it on every search
+        # result and it was being dropped here — it decides whether a
+        # purchase crosses a border, which decides customs, duties and how
+        # far a return has to travel.
+        "item_location": (item.get("itemLocation") or {}).get("country"),
+        # Flag so the interface can honestly disclose this is a converted
+        # price, not a native INR listing.
+        "price_is_converted": True,
+    }
+
+
 def search_live_catalog(query: str, max_price_paise: int, limit: int = None,
-                        sort: str = None) -> list[dict]:
+                        sort: str = None, condition_ids: set = None) -> list[dict]:
     """
     Searches real, live eBay listings and normalizes them into the same
     shape your risk gate / agent pipeline already expects:
@@ -226,11 +311,23 @@ def search_live_catalog(query: str, max_price_paise: int, limit: int = None,
             # and more reliable than filtering them out downstream. The ids
             # kept are New, New other, New with defects, Certified/Seller
             # refurbished, and the Used grades.
+            # Asking eBay for only the conditions wanted, rather than
+            # fetching everything and discarding most of it: a page of
+            # twenty-five spent mostly on refurbished stock leaves a handful
+            # of new listings to choose between.
             "filter": (
                 f"price:[..{max_price_usd}],priceCurrency:USD,"
-                "conditionIds:{1000|1500|1750|2000|2010|2020|2030|2500|3000|4000|5000|6000}"
+                "conditionIds:{" + "|".join(sorted(condition_ids or _ALL_SELLABLE_CONDITIONS)) + "}"
             ),
             "limit": limit,
+            # The brand distribution for this result set, in the call that
+            # was happening anyway. Brands are read from here rather than
+            # guessed out of titles, where the recurring tokens turn out to
+            # be feature words rather than makers.
+            # MATCHING_ITEMS must be named explicitly: fieldgroups replaces
+            # the default rather than adding to it, and asking for the
+            # aspects alone returns the refinements with no listings.
+            "fieldgroups": "MATCHING_ITEMS,ASPECT_REFINEMENTS",
             # eBay's default Best Match optimises for cheap and popular,
             # which is the opposite of what "the best X under N" means: a
             # search for a good camera phone under Rs20,000 came back full of
@@ -241,60 +338,16 @@ def search_live_catalog(query: str, max_price_paise: int, limit: int = None,
         timeout=10,
     )
     response.raise_for_status()
-    items = response.json().get("itemSummaries", [])
+    body = response.json()
+    items = body.get("itemSummaries", [])
 
-    results = []
-    for item in items:
-        price = item.get("price", {})
-        price_usd = float(price.get("value", 0))
-        price_inr_paise = int(price_usd * usd_to_inr * 100)
+    results = [_normalise_summary(i, usd_to_inr, query) for i in items]
 
-        seller = item.get("seller", {})
-        feedback_pct = seller.get("feedbackPercentage")
-        rating = round(float(feedback_pct) / 20, 1) if feedback_pct else 4.0
-        # Kept raw as well — the trust agent thresholds on the real
-        # percentage rather than the 0-5 display value.
-        seller_feedback = float(feedback_pct) if feedback_pct else None
-
-        image = item.get("image", {}).get("imageUrl")
-
-        marketing_price = item.get("marketingPrice", {})
-        original_price_usd_raw = marketing_price.get("originalPrice", {}).get("value")
-        discount_pct_raw = marketing_price.get("discountPercentage")
-
-        original_price_paise = (
-            int(float(original_price_usd_raw) * usd_to_inr * 100)
-            if original_price_usd_raw else None
-        )
-        discount_percent = _percent(discount_pct_raw)
-
-        shipping = _shipping(item, usd_to_inr)
-
-        results.append({
-            "id": item.get("itemId"),
-            "name": item.get("title"),
-            "category": query,
-            # A variation group's search price is one representative of the
-            # set, not the option being asked for. Carried through so the
-            # resolver can replace it with the real one.
-            "item_group_id": (
-                (item.get("itemGroupHref") or "").split("item_group_id=")[-1]
-                if item.get("itemGroupType") == "SELLER_DEFINED_VARIATIONS" else None
-            ),
-            "price_paise": price_inr_paise,
-            "original_price_paise": original_price_paise,
-            "discount_percent": discount_percent,
-            "rating": rating,
-            **shipping,
-            "stock": 1,
-            "url": item.get("itemWebUrl"),
-            "image": image,
-            "condition": item.get("condition"),
-            "seller_feedback": seller_feedback,
-            # Flag so the frontend/pitch can honestly disclose this is a
-            # converted price, not a native INR listing
-            "price_is_converted": True,
-        })
+    # Handed to the brand module by the caller; kept on the function so the
+    # return type stays a plain list of listings.
+    search_live_catalog.last_aspects = (
+        (body.get("refinement") or {}).get("aspectDistributions") or []
+    )
 
     return results
 
@@ -489,3 +542,121 @@ def resolve_variants(items: list[dict], query: str = "", requirements=None,
             ).lstrip(", ")
 
     return items
+
+
+# ── Product reviews ──────────────────────────────────────────────────────
+# Reviews and return terms are only on the single-item endpoint, so they
+# cost one call per listing. Cached by item id for the life of the process;
+# listings do not gain reviews mid-run.
+_REVIEW_CACHE: dict[str, dict] = {}
+
+
+def enrich_reviews(items: list[dict], limit: int = 8) -> list[dict]:
+    """
+    Add real star ratings and return terms to the first `limit` listings.
+
+    Only the shortlist is enriched — the ones that could plausibly be
+    recommended. Anything beyond the limit keeps review_stars None, and the
+    quality model treats that as unknown rather than assuming the worst.
+    """
+    token = _get_access_token()
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "X-EBAY-C-MARKETPLACE-ID": "EBAY_US",
+    }
+
+    for item in items[:limit]:
+        if item.get("source") != "ebay":
+            continue
+        item_id = str(item.get("id") or "")
+        if not item_id:
+            continue
+
+        if item_id in _REVIEW_CACHE:
+            item.update(_REVIEW_CACHE[item_id])
+            continue
+
+        try:
+            response = httpx.get(f"{ITEM_URL}{item_id}",
+                                 headers=headers, timeout=8)
+            if response.status_code != 200:
+                continue
+            body = response.json()
+        except Exception as exc:
+            # One listing failing to enrich must not cost the run its
+            # results; it simply stays unrated.
+            print(f"[ebay] review lookup skipped for {item_id}: {exc}", flush=True)
+            continue
+
+        rating = body.get("primaryProductReviewRating") or {}
+        found = {
+            "review_stars": _num_or_none(rating.get("averageRating")),
+            "review_count": _num_or_none(rating.get("reviewCount")),
+            "returns_accepted": bool(
+                (body.get("returnTerms") or {}).get("returnsAccepted")),
+        }
+        _REVIEW_CACHE[item_id] = found
+        item.update(found)
+
+    return items
+
+
+def _num_or_none(value):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+# ── Image search ─────────────────────────────────────────────────────────
+
+IMAGE_SEARCH_URL = "https://api.ebay.com/buy/browse/v1/item_summary/search_by_image"
+
+
+def search_by_image(image_b64: str, max_price_paise: int = 0,
+                    limit: int = None) -> list[dict]:
+    """
+    Find listings that look like a photograph.
+
+    eBay performs the visual match against its own catalogue. That is the
+    entire reason this is done here rather than by describing the picture
+    with a vision model and searching for the description: a model that
+    reads "Galaxy S22" off a picture of an S23 produces a search that is
+    confidently wrong, and nothing downstream could tell. Here the only
+    claim being made is eBay's own — these are the listings eBay says the
+    photo resembles — and the agent never has to name the product at all.
+
+    The price ceiling is applied by eBay through the same filter the typed
+    search uses, so an image search and a typed search under the same
+    budget are bounded identically.
+    """
+    usd_to_inr = settings.get("ebay", "usd_to_inr")
+    if limit is None:
+        limit = settings.get("scout", "result_limit")
+
+    params = {"limit": limit}
+    if max_price_paise:
+        max_price_usd = round((max_price_paise / 100) / usd_to_inr, 2)
+        params["filter"] = (
+            f"price:[..{max_price_usd}],priceCurrency:USD,"
+            "conditionIds:{1000|1500|1750|2000|2010|2020|2030|2500|3000|4000|5000|6000}"
+        )
+
+    response = httpx.post(
+        IMAGE_SEARCH_URL,
+        headers={
+            "Authorization": f"Bearer {_get_access_token()}",
+            "X-EBAY-C-MARKETPLACE-ID": "EBAY_US",
+            "Content-Type": "application/json",
+        },
+        params=params,
+        json={"image": image_b64},
+        timeout=40,
+    )
+    response.raise_for_status()
+    items = response.json().get("itemSummaries") or []
+
+    # The category is what a typed search would have put here. There is no
+    # query, and inventing one would be the hallucination this whole path
+    # exists to avoid, so it says where the match came from instead.
+    return [_normalise_summary(i, usd_to_inr, "matched by image") for i in items]

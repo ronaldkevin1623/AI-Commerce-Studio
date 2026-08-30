@@ -94,6 +94,7 @@ export default function AgentConsolePage() {
     abandonPrompt,
     continueRun,
     terminateRun,
+    startPhotoSearch,
   } = useConversation();
 
   useEffect(() => {
@@ -108,6 +109,11 @@ export default function AgentConsolePage() {
   const handleSend = (text) => {
     const started = startRun(text);
     if (started) checkoutTriggeredRef.current = false;
+  };
+
+  const handleImage = (payload) => {
+    checkoutTriggeredRef.current = false;
+    startPhotoSearch(payload);
   };
 
   const handleNewChat = () => {
@@ -259,7 +265,7 @@ export default function AgentConsolePage() {
             </Stack>
 
             <Box sx={{ width: "100%", maxWidth: COLUMN }}>
-              <PromptBar onSend={handleSend} disabled={busyThinking} tall />
+              <PromptBar onSend={handleSend} onImage={handleImage} disabled={busyThinking} tall />
             </Box>
 
             <Typography variant="caption" color="text.secondary" sx={{ mt: 2.5 }}>
@@ -326,7 +332,7 @@ export default function AgentConsolePage() {
                 <PaymentStatusBanner status={paymentStatus} />
               </Box>
             )}
-            <PromptBar onSend={handleSend} disabled={busyThinking} />
+            <PromptBar onSend={handleSend} onImage={handleImage} disabled={busyThinking} />
           </Box>
         </Box>
         )}

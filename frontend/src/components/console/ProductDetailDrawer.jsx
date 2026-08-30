@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { Box, Button, Drawer, Stack, Typography } from "@mui/material";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import CloseIcon from "@mui/icons-material/Close";
@@ -7,6 +8,7 @@ import WarningAmberOutlinedIcon from "@mui/icons-material/WarningAmberOutlined";
 import LocalShippingOutlinedIcon from "@mui/icons-material/LocalShippingOutlined";
 
 import AddShoppingCartIcon from "@mui/icons-material/AddShoppingCartOutlined";
+import ShieldOutlinedIcon from "@mui/icons-material/ShieldOutlined";
 
 import { API_BASE } from "../../config";
 import SellerContactDialog from "./SellerContactDialog";
@@ -45,6 +47,7 @@ export default function ProductDetailDrawer({
   const [activeImage, setActiveImage] = useState(0);
   const [loading, setLoading] = useState(false);
   const [contactOpen, setContactOpen] = useState(false);
+  const navigate = useNavigate();
   const { add, has } = useCart();
   const inCart = product ? has(product.id) : false;
 
@@ -351,11 +354,25 @@ export default function ProductDetailDrawer({
             </Typography>
           </Box>
         ) : (
-          <Box sx={{ p: 1.5, mb: 2, borderRadius: 1.5, border: "1px solid", borderColor: "divider" }}>
+          <Box
+            sx={{
+              p: 1.5, mb: 2, borderRadius: 1.5,
+              border: "1px solid",
+              borderColor: "rgba(245,158,11,0.45)",
+              bgcolor: "rgba(245,158,11,0.08)",
+            }}
+          >
+            <Typography
+              variant="caption"
+              sx={{ color: "warning.main", fontWeight: 700, display: "block", mb: 0.5 }}
+            >
+              Nobody will ship this
+            </Typography>
             <Typography variant="caption" sx={{ color: "text.secondary", lineHeight: 1.6, display: "block" }}>
               A live eBay listing. AI Commerce Studio has no selling relationship with
               eBay, so it can search, screen and link to this — but paying for
-              it here creates a Razorpay order that no seller will fulfil.
+              it here creates a Razorpay order that no seller will fulfil, and
+              no delivery will follow.
             </Typography>
           </Box>
         )}
@@ -406,6 +423,27 @@ export default function ProductDetailDrawer({
             {loading ? "Checking price…" : `Buy now · ${inr(merged.price_paise)}`}
           </Button>
         </Stack>
+        {/* Hands this listing to the red team page, which audits it there.
+            The listing travels in sessionStorage rather than in the URL: it
+            is a whole record, and a query string long enough to hold it
+            would be both ugly and fragile. */}
+        <Button
+          fullWidth
+          variant="outlined"
+          onClick={() => {
+            try {
+              sessionStorage.setItem("commerce-studio.audit-product",
+                                     JSON.stringify(merged));
+            } catch {
+              /* private mode: the page falls back to its normal view */
+            }
+            navigate("/redteam");
+          }}
+          startIcon={<ShieldOutlinedIcon sx={{ fontSize: 16 }} />}
+          sx={{ mt: 0.75, py: 1, borderColor: "divider", color: "text.primary" }}
+        >
+          Move to red team
+        </Button>
         <Button
           fullWidth
           onClick={() => setContactOpen(true)}

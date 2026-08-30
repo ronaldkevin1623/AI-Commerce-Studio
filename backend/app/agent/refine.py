@@ -36,10 +36,19 @@ _PRICIER = re.compile(
     r"\b(dearer|pricier|more\s+expensive|higher\s+(end|price)|premium|"
     r"better\s+quality|nicer|upgrade)\b", re.IGNORECASE)
 _NEWER = re.compile(r"\b(new|brand\s*new|unused|sealed)\b", re.IGNORECASE)
-_NOT_USED = re.compile(r"\b(no|not|avoid|exclude|without)\s+(used|refurb\w*|second[\s-]?hand)\b",
-                       re.IGNORECASE)
-_MORE = re.compile(r"\b(more\s+(options|results|choices)|show\s+more|others?|"
-                   r"alternatives?|anything\s+else)\b", re.IGNORECASE)
+# "nothing refurbished please" carried a negation this never listed, so the
+# message read as naming a new subject and started a fresh search. The
+# optional filler also covers "not the used ones".
+_NOT_USED = re.compile(
+    r"\b(no|not|nothing|none|avoid|exclude|without|skip|drop)\s+"
+    r"(?:the\s+|any\s+)?(used|refurb\w*|second[\s-]?hand|open[\s-]?box)\b",
+    re.IGNORECASE)
+# "show me more" puts a word between the verb and the operator, which the
+# anchored "show more" missed.
+_MORE = re.compile(
+    r"\b(more\s+(options|results|choices)|(show|see|got|have)\s+(me\s+)?more"
+    r"|any\s+more|others?|alternatives?|anything\s+else|what\s+else)\b",
+    re.IGNORECASE)
 _EXCLUDE = re.compile(r"\b(?:not|no|exclude|without|avoid|except)\s+([a-z0-9][\w\- ]{1,24})",
                       re.IGNORECASE)
 _ONLY = re.compile(r"\b(?:only|just|prefer)\s+([a-z0-9][\w\- ]{1,24})", re.IGNORECASE)
@@ -71,6 +80,49 @@ _FILLER = {
 # product, which is the safe direction to be wrong in — the person sees a new
 # search happen and can say so, rather than a filter silently swallowing the
 # word.
+# A number welded to a unit: 512gb, 2tb, 55inch, 5000mah, 750ml, 2m.
+# Units are a closed set; the numbers in front of them are not, which is why
+# this is a pattern and _ATTRIBUTES below is a list.
+_MEASURE_TOKEN = re.compile(
+    r"^\d+(?:\.\d+)?(gb|tb|mb|kb|ml|l|litre|liter|kg|g|mm|cm|m|inch|in|ft"
+    r"|w|mah|hz|mhz|ghz|mp|k|x)$",
+    re.IGNORECASE)
+
+# The unit a measurement carries, so a new one can replace the old one of
+# the same kind rather than being bolted on beside it.
+_MEASURE_PARTS = re.compile(r"^(\d+(?:\.\d+)?)\s*([a-z]+)$", re.IGNORECASE)
+
+# Units grouped by what they measure. "1tb" has to replace "256GB" — they
+# are different units but the same dimension, and a phone does not have one
+# of each. Matching on the unit alone left the old capacity in the query and
+# searched for a phone that was both.
+_DIMENSIONS = {
+    # Spelled-out units appear here but not in _MEASURE_TOKEN: a person
+    # types "3m" as a follow-up, while the listing and the original request
+    # say "2 metre" — so the word forms have to be findable for replacement
+    # even though nobody types them as a bare follow-up token.
+    "storage": {"kb", "mb", "gb", "tb"},
+    "length": {"mm", "cm", "m", "inch", "inches", "in", "ft", "feet", "foot",
+               "metre", "metres", "meter", "meters"},
+    "weight": {"g", "kg", "gram", "grams", "kilo", "kilos", "kilogram", "kilograms"},
+    "volume": {"ml", "l", "litre", "liter", "litres", "liters", "millilitre",
+               "millilitres", "milliliter", "milliliters"},
+    "power": {"w"},
+    "battery": {"mah"},
+    "frequency": {"hz", "mhz", "ghz"},
+    "camera": {"mp"},
+}
+_UNIT_DIMENSION = {unit: dimension
+                   for dimension, units in _DIMENSIONS.items()
+                   for unit in units}
+
+# "55 inch" and "55inch" are the same spec typed two ways; the second is
+# what the tokeniser can see, so the first is rewritten into it.
+_SPACED_MEASURE = re.compile(
+    r"\b(\d+(?:\.\d+)?)\s+(gb|tb|mb|kb|ml|l|litre|liter|kg|g|mm|cm|m|inch|in"
+    r"|ft|w|mah|hz|mhz|ghz|mp)\b",
+    re.IGNORECASE)
+
 _ATTRIBUTES = {
     # colour
     "red", "blue", "green", "black", "white", "grey", "gray", "silver",
@@ -129,7 +181,10 @@ def parse(text: str, previous_query: str = "") -> dict:
     Returns {"refine": False} when the message names something new — the
     caller should run a fresh search rather than filtering.
     """
-    text = (text or "").strip()
+    # "55 inch" is one spec typed with a space in it; joined up so the
+    # tokeniser sees a measurement rather than a stray number and a stray
+    # word, either of which reads as a new subject.
+    text = _SPACED_MEASURE.sub(r"\1\2", (text or "").strip())
     if not text:
         return {"refine": False, "reason": "empty"}
 
@@ -167,9 +222,16 @@ def parse(text: str, previous_query: str = "") -> dict:
 
     # An attribute narrows; a word already in the last search is the person
     # restating their subject; anything else is a new request.
-    attributes = sorted(w for w in residue if w in _ATTRIBUTES)
+    # A measurement is an attribute in any category — 512gb, 2 metre, 55
+    # inch, 5000mah. Written as a pattern rather than listed, because the
+    # numbers are unbounded and the units are not: "512gb" after an iPhone
+    # search was read as a brand-new subject and fetched SSDs and SD cards,
+    # when it plainly meant the same phone with different storage.
+    attributes = sorted(w for w in residue
+                        if w in _ATTRIBUTES or _MEASURE_TOKEN.match(w))
     novel = {w for w in residue
-             if w not in _ATTRIBUTES and _singular(w) not in known}
+             if w not in _ATTRIBUTES and not _MEASURE_TOKEN.match(w)
+             and _singular(w) not in known}
 
     if novel:
         return {"refine": False, "reason": "names something new",
@@ -184,6 +246,36 @@ def parse(text: str, previous_query: str = "") -> dict:
             ops["attributes"] = terms
 
     return {"refine": True, "ops": ops} if ops else {"refine": False, "reason": "no operators"}
+
+
+def amend(previous_query: str, attributes: list) -> str:
+    """
+    The previous request with a new spec swapped in for the old one.
+
+    "512gb" after "iphone cosmic orange 17pro 256GB under 125000" means that
+    phone with different storage, and neither filtering nor searching for
+    "512gb" alone can produce it: the first has no 512GB listing to keep,
+    the second loses the iPhone. So the subject is carried over and only the
+    measurement of the same unit is replaced — gb for gb, inch for inch —
+    leaving everything else, including the budget, exactly as typed.
+    """
+    amended = previous_query or ""
+    for attribute in attributes:
+        parts = _MEASURE_PARTS.match(attribute)
+        if parts:
+            unit = parts.group(2).lower()
+            # Any measurement of the same dimension is the spec being
+            # replaced — 1tb takes the place of 256GB, not a seat beside it.
+            siblings = _DIMENSIONS.get(_UNIT_DIMENSION.get(unit), {unit})
+            pattern = re.compile(
+                r"\b\d+(?:\.\d+)?\s*(?:" + "|".join(sorted(siblings, key=len, reverse=True)) + r")\b",
+                re.IGNORECASE)
+            if pattern.search(amended):
+                amended = pattern.sub(attribute, amended, count=1)
+                continue
+        if attribute.lower() not in amended.lower():
+            amended = f"{amended} {attribute}".strip()
+    return amended
 
 
 def apply(candidates: list[dict], ops: dict, anchor_paise: int = None) -> dict:

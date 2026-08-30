@@ -20,13 +20,18 @@ export default function AbandonRunDialog({ open, stage, onContinue, onTerminate 
       onClose={onContinue}
       maxWidth="xs"
       fullWidth
-      PaperProps={{
+      // slotProps.paper, not PaperProps: the old name is removed in MUI v7
+      // and was reaching the DOM as an unknown attribute, which React logged
+      // as an error on every run that offered to abandon.
+      slotProps={{
+        paper: {
         sx: {
           bgcolor: "background.paper",
           backgroundImage: "none",
           border: "1px solid",
           borderColor: "divider",
           borderRadius: 3,
+        },
         },
       }}
     >

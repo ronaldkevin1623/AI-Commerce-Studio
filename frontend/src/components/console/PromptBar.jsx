@@ -1,6 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Box, Typography, IconButton } from "@mui/material";
 import AddIcon from "@mui/icons-material/Add";
+import CloseIcon from "@mui/icons-material/Close";
+import ImageOutlinedIcon from "@mui/icons-material/ImageOutlined";
 import SendIcon from "@mui/icons-material/ArrowUpward";
 import LocalOfferIcon from "@mui/icons-material/LocalOfferOutlined";
 import StarIcon from "@mui/icons-material/StarBorderOutlined";
@@ -12,6 +14,18 @@ import SavingsIcon from "@mui/icons-material/SavingsOutlined";
  * actually understands (it maps these to priority: discount / rating /
  * delivery_days / price). Mirrors the reference's "@" sources menu.
  */
+/**
+ * The one row in this menu that starts a search rather than narrowing one.
+ * Kept beside the filters because the "+" is where people look for "what
+ * else can I put in here", and a photo is the answer.
+ */
+const PHOTO_ROW = {
+  key: "photo",
+  label: "Search by photo",
+  desc: "Match a picture against eBay's listings",
+  icon: <ImageOutlinedIcon sx={{ fontSize: 16 }} />,
+};
+
 const QUICK_FILTERS = [
   { key: "discount", label: "Best discount", desc: "Prioritise deals", icon: <LocalOfferIcon sx={{ fontSize: 16 }} />, insert: "with the best discount" },
   { key: "rating", label: "Top rated", desc: "Prioritise reviews", icon: <StarIcon sx={{ fontSize: 16 }} />, insert: "with the highest rating" },
@@ -31,18 +45,56 @@ function parseSlash(draft) {
   return match ? { query: match[2].toLowerCase() } : null;
 }
 
-export default function PromptBar({ onSend, disabled, placeholder, tall = false }) {
+/**
+ * Shrink a picture before it is sent.
+ *
+ * A phone photo is several megabytes of detail that a visual match does not
+ * use, and base64 inflates it by a third on the way out. Resizing to fit
+ * 1024px keeps the upload quick on a slow connection and keeps it inside
+ * the size the server accepts, without changing what the photo is of.
+ */
+async function downscale(file, maxEdge = 1024, quality = 0.85) {
+  const bitmap = await createImageBitmap(file);
+  const scale = Math.min(1, maxEdge / Math.max(bitmap.width, bitmap.height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(bitmap.width * scale);
+  canvas.height = Math.round(bitmap.height * scale);
+  canvas.getContext("2d").drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close?.();
+  return canvas.toDataURL("image/jpeg", quality);
+}
+
+export default function PromptBar({ onSend, onImage, disabled, placeholder, tall = false }) {
   const [draft, setDraft] = useState("");
   const [plusOpen, setPlusOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
+  const [photo, setPhoto] = useState(null); // { dataUrl, name }
+  const [photoError, setPhotoError] = useState(null);
+  const [dragging, setDragging] = useState(false);
   const rootRef = useRef(null);
   const inputRef = useRef(null);
+  const fileRef = useRef(null);
+
+  const takeFile = async (file) => {
+    setPhotoError(null);
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      setPhotoError("That is not an image.");
+      return;
+    }
+    try {
+      setPhoto({ dataUrl: await downscale(file), name: file.name || "pasted image" });
+      setPlusOpen(false);
+    } catch {
+      setPhotoError("That image could not be read.");
+    }
+  };
 
   const slash = parseSlash(draft);
   const menu = plusOpen ? "plus" : slash ? "slash" : null;
   const rows =
     menu === "plus"
-      ? QUICK_FILTERS
+      ? [PHOTO_ROW, ...QUICK_FILTERS]
       : menu === "slash"
         ? TEMPLATES.filter((t) => t.label.slice(1).startsWith(slash.query))
         : [];
@@ -66,6 +118,11 @@ export default function PromptBar({ onSend, disabled, placeholder, tall = false 
   }, [plusOpen]);
 
   const pick = (row) => {
+    if (row.key === "photo") {
+      setPlusOpen(false);
+      fileRef.current?.click();
+      return;
+    }
     if (menu === "plus") {
       setDraft((d) => (d.trim() ? `${d.trim()} ${row.insert}` : row.insert));
       setPlusOpen(false);
@@ -75,16 +132,87 @@ export default function PromptBar({ onSend, disabled, placeholder, tall = false 
     inputRef.current?.focus();
   };
 
-  const canSend = draft.trim().length > 0 && !disabled;
+  // A photo is a request on its own; words beside it are optional and only
+  // ever narrow it (a budget), never describe it.
+  const canSend = (draft.trim().length > 0 || Boolean(photo)) && !disabled;
   const send = () => {
     if (!canSend) return;
-    onSend(draft.trim());
+    if (photo) {
+      onImage?.({ imageB64: photo.dataUrl, note: draft.trim() });
+      setPhoto(null);
+    } else {
+      onSend(draft.trim());
+    }
     setDraft("");
     setPlusOpen(false);
   };
 
   return (
-    <Box ref={rootRef} sx={{ position: "relative" }}>
+    <Box
+      ref={rootRef}
+      sx={{ position: "relative" }}
+      onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
+      onDragLeave={() => setDragging(false)}
+      onDrop={(e) => {
+        e.preventDefault();
+        setDragging(false);
+        takeFile(e.dataTransfer.files?.[0]);
+      }}
+    >
+      <input
+        ref={fileRef}
+        type="file"
+        accept="image/*"
+        hidden
+        onChange={(e) => {
+          takeFile(e.target.files?.[0]);
+          e.target.value = ""; // so the same file can be chosen twice
+        }}
+      />
+
+      {(photo || photoError || dragging) && (
+        <Box
+          sx={{
+            mb: 1, p: 1, borderRadius: 2, display: "flex", alignItems: "center", gap: 1,
+            border: "1px dashed", borderColor: photoError ? "error.main" : "divider",
+            bgcolor: "background.paper",
+          }}
+        >
+          {photo && (
+            <Box
+              component="img"
+              src={photo.dataUrl}
+              alt=""
+              sx={{ width: 40, height: 40, borderRadius: 1, objectFit: "cover", flexShrink: 0 }}
+            />
+          )}
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <Typography variant="caption" sx={{ display: "block", fontSize: 11.5 }}>
+              {photoError
+                ? photoError
+                : photo
+                  ? "Searching by this photo"
+                  : "Drop a photo to search by it"}
+            </Typography>
+            {photo && (
+              <Typography variant="caption" sx={{ color: "text.secondary", fontSize: 10.5 }}>
+                eBay matches the picture against its own listings — the agent does
+                not identify the product. Add a budget in words if you want one.
+              </Typography>
+            )}
+          </Box>
+          {photo && (
+            <IconButton
+              size="small"
+              onClick={() => { setPhoto(null); setPhotoError(null); }}
+              sx={{ flexShrink: 0 }}
+            >
+              <CloseIcon sx={{ fontSize: 15 }} />
+            </IconButton>
+          )}
+        </Box>
+      )}
+
       {menu && rows.length > 0 && (
         <Box
           sx={{
@@ -186,7 +314,15 @@ export default function PromptBar({ onSend, disabled, placeholder, tall = false 
               send();
             }
           }}
-          placeholder={placeholder ?? "Ask for anything — try / for templates"}
+          placeholder={placeholder ?? "Ask for anything — or paste a photo"}
+          onPaste={(e) => {
+            const file = [...(e.clipboardData?.items ?? [])]
+              .find((i) => i.type.startsWith("image/"))?.getAsFile();
+            if (file) {
+              e.preventDefault();
+              takeFile(file);
+            }
+          }}
           sx={{
             flex: 1,
             minWidth: 0,

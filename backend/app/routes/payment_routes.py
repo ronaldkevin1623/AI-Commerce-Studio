@@ -9,7 +9,7 @@ this gives you a genuine, real-time confirmation path without ngrok.)
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from app.razorpay_client import fetch_payment, create_order
+from app.razorpay_client import fetch_payment, capture_payment, create_order
 from app.agent.risk_gate import evaluate as risk_evaluate
 from app.agent import merchant_client
 from app.firebase_client import (
@@ -55,8 +55,32 @@ def verify_payment(req: VerifyPaymentRequest):
     status = payment.get("status")
     amount = payment.get("amount")
 
+    # Authorised means the person paid and the bank agreed; only the capture
+    # is outstanding. Whether that happens automatically is an account
+    # setting, so do it here rather than reporting a completed payment as a
+    # failure. Any error leaves `status` as it was and falls through to the
+    # honest refusal below.
+    if status == "authorized":
+        try:
+            capture_payment(req.razorpay_payment_id, amount)
+            payment = fetch_payment(req.razorpay_payment_id)
+            status = payment.get("status")
+            amount = payment.get("amount")
+            log_decision(
+                action_type="payment_captured",
+                amount_paise=amount,
+                decision="allowed",
+                reason="Payment was authorised but not auto-captured; "
+                       "captured explicitly via the Payments API",
+                order_id=req.razorpay_order_id,
+                customer_id=req.customer_id,
+            )
+        except Exception as exc:
+            print(f"[payment] explicit capture failed: {exc}", flush=True)
+
     if status == "captured":
-        update_order_status(req.razorpay_order_id, "paid")
+        update_order_status(req.razorpay_order_id, "paid",
+                            payment_id=req.razorpay_payment_id)
         log_decision(
             action_type="payment_confirmed",
             amount_paise=amount,

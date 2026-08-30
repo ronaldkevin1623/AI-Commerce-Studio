@@ -10,6 +10,7 @@ import ChatBubbleOutlineOutlinedIcon from "@mui/icons-material/ChatBubbleOutline
 import DescriptionOutlinedIcon from "@mui/icons-material/DescriptionOutlined";
 import ReplayOutlinedIcon from "@mui/icons-material/ReplayOutlined";
 import ShieldOutlinedIcon from "@mui/icons-material/ShieldOutlined";
+import LockOutlinedIcon from "@mui/icons-material/LockOutlined";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
@@ -54,6 +55,7 @@ const PRIMARY_BY_ROLE = {
   ],
   merchant: [
     { label: "Home", icon: <HomeOutlinedIcon />, path: "/console" },
+    { label: "Hive", icon: <HubOutlinedIcon />, path: "/merchant/hive" },
     { label: "Orders", icon: <ReceiptLongOutlinedIcon />, path: "/merchant/orders" },
     { label: "Products", icon: <LocalOfferOutlinedIcon />, path: "/merchant/products" },
     { label: "Growth", icon: <SpeedOutlinedIcon />, path: "/merchant/growth" },
@@ -67,6 +69,7 @@ const ACCOUNTABILITY = [
   { label: "Audit trail", icon: <DescriptionOutlinedIcon />, path: "/audit" },
   { label: "Failure recovery", icon: <ReplayOutlinedIcon />, path: "/recovery" },
   { label: "Red team", icon: <ShieldOutlinedIcon />, path: "/redteam" },
+  { label: "Your data", icon: <LockOutlinedIcon />, path: "/security" },
 ];
 
 function Row({ item, active, onClick }) {

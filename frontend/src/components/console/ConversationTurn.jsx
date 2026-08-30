@@ -26,6 +26,7 @@ const BUYER_ONLY = ["buyer"];
  */
 function deriveAnswer(events) {
   let listings = null;
+  let setAside = 0;
   let flagged = null;
   let shown = null;
   let pick = null;
@@ -37,13 +38,44 @@ function deriveAnswer(events) {
   // wrong seller is worse than one that names none.
   let merchantName = null;
   let sawEbay = false;
+  // A photo search retrieves listings a different way, and the sentence has
+  // to say so. "I searched live eBay listings" describes a keyword search;
+  // saying it about a picture would credit the agent with having worked out
+  // what the picture was of, which is exactly what it did not do.
+  let byPhoto = false;
+  // A turn that answered rather than searched. The sentence is composed on
+  // the server from the listings' own fields, so it is carried through
+  // verbatim rather than being rebuilt from counts here.
+  let reply = null;
 
   for (const event of events) {
+    if (event.type === "reply") reply = event.payload;
     if (event.type === "step") {
+      // How many were actually retrieved, before anything was set aside.
+      // Trust's own count is post-screen now that relevance runs first, so
+      // reading it here would report the survivors as the search result.
+      const retrieved = event.payload.match(/(\d+) live listings retrieved/);
+      if (retrieved) listings = Number(retrieved[1]);
+
+      const byImage = event.payload.match(
+        /image search returned (\d+) listings/);
+      if (byImage) {
+        listings = Number(byImage[1]);
+        byPhoto = true;
+      }
+
+      // How many the relevance screen set aside, and why.
+      const screened = event.payload.match(
+        /(\d+) of (\d+) listings are the product itself — set aside (\d+)/);
+      if (screened) {
+        listings = Number(screened[2]);
+        setAside = Number(screened[3]);
+      }
+
       const flaggedMatch = event.payload.match(/Flagged (\d+) of (\d+) listings/);
       if (flaggedMatch) {
         flagged = Number(flaggedMatch[1]);
-        listings = Number(flaggedMatch[2]);
+        if (listings == null) listings = Number(flaggedMatch[2]);
       }
       const allPassed = event.payload.match(/All (\d+) listings passed/);
       if (allPassed) {
@@ -68,7 +100,10 @@ function deriveAnswer(events) {
     }
   }
 
-  if (blocked) return blocked;
+  // Returned as a pair so the component can render a dead end
+  // differently without having to guess from the text.
+  if (blocked) return { text: blocked, blocked: true };
+  if (reply) return { text: reply, blocked: false };
   if (!shown && !pick) return null;
 
   const parts = [];
@@ -77,8 +112,15 @@ function deriveAnswer(events) {
       .filter(Boolean)
       .join(" and ");
     parts.push(
-      `I searched ${venues || "live listings"} and found ${listings}` +
-        (flagged ? `, though Trust flagged ${flagged} as suspect and left ${flagged === 1 ? "it" : "them"} out of the ranking` : "")
+      (byPhoto
+        ? `eBay matched your photo against its own listings and returned ${listings}`
+        : `I searched ${venues || "live listings"} and found ${listings}`) +
+        (setAside
+          ? `, set aside ${setAside} that were accessories or a different product`
+          : "") +
+        (flagged
+          ? `, though Trust flagged ${flagged} as suspect and left ${flagged === 1 ? "it" : "them"} out of the ranking`
+          : "")
     );
   }
   if (shown) {
@@ -88,12 +130,15 @@ function deriveAnswer(events) {
     const trimmed = reason.replace(/\s*$/, "").replace(/\.$/, "");
     parts.push(`I'd go with the ${pick} — ${trimmed.charAt(0).toLowerCase()}${trimmed.slice(1)}`);
   }
-  return parts.length ? `${parts.join(". ")}.` : null;
+  return parts.length ? { text: `${parts.join(". ")}.`, blocked: false } : null;
 }
 
 function deriveState(events) {
   let product = null;
   let candidates = [];
+  // The picture a photo search was made with, carried on the turn's own
+  // events so an archived turn still shows it.
+  let photo = null;
   let riskGate = { state: "idle", reason: null };
   let orderInfo = null;
   let selectionPrompt = null;
@@ -118,6 +163,7 @@ function deriveState(events) {
       mandateVerification = event.payload;
       mandateChain = event.payload.summary;
     }
+    if (event.type === "photo") photo = event.payload;
     if (event.type === "candidates") candidates = event.payload;
     if (event.type === "await_selection") selectionPrompt = event.payload;
     if (event.type === "step" && event.payload.toLowerCase().startsWith("proceeding with")) {
@@ -146,6 +192,7 @@ function deriveState(events) {
   return {
     product, candidates, riskGate, orderInfo, completedKeys, activeKey,
     selectionPrompt, selectionResolved, mandateChain, mandateVerification,
+    photo,
   };
 }
 
@@ -166,6 +213,7 @@ export default function ConversationTurn({
   const {
     product, candidates, riskGate, orderInfo, completedKeys, activeKey,
     selectionPrompt, selectionResolved, mandateChain, mandateVerification,
+    photo,
   } = deriveState(turn.events);
 
   const answer = deriveAnswer(turn.events);
@@ -208,14 +256,43 @@ export default function ConversationTurn({
             border: "1px solid",
             borderColor: "divider",
             borderRadius: "14px 14px 4px 14px",
-            px: 1.75,
-            py: 1.1,
+            px: photo ? 0.75 : 1.75,
+            py: photo ? 0.75 : 1.1,
             maxWidth: "75%",
           }}
         >
-          <Typography variant="body2" sx={{ color: "text.primary" }}>
-            {turn.query}
-          </Typography>
+          {/* When the request was a picture, the picture is the request.
+              Printing "Search by photo" beside it would be a caption saying
+              what the reader is already looking at — so only a note the
+              person actually typed keeps its line. */}
+          {photo ? (
+            <>
+              <Box
+                component="img"
+                src={photo.image}
+                alt="The photo you searched with"
+                sx={{
+                  display: "block",
+                  maxWidth: 200,
+                  maxHeight: 200,
+                  borderRadius: "10px 10px 3px 10px",
+                  objectFit: "cover",
+                }}
+              />
+              {photo.note && (
+                <Typography
+                  variant="body2"
+                  sx={{ color: "text.primary", px: 1, pt: 0.75, pb: 0.25 }}
+                >
+                  {photo.note}
+                </Typography>
+              )}
+            </>
+          ) : (
+            <Typography variant="body2" sx={{ color: "text.primary" }}>
+              {turn.query}
+            </Typography>
+          )}
         </Box>
       </Stack>
 
@@ -230,10 +307,43 @@ export default function ConversationTurn({
           </Box>
         )}
 
-        {answer && (
+        {answer?.blocked && (
+          <Box
+            sx={{
+              p: 2.25,
+              mb: 1.5,
+              borderRadius: 2,
+              border: "1px solid",
+              borderColor: "warning.dark",
+              bgcolor: "rgba(245,158,11,0.07)",
+            }}
+          >
+            <Typography variant="body2" sx={{ fontWeight: 700, mb: 0.75 }}>
+              Nothing to show for this one
+            </Typography>
+            {/* The message arrives as a fact followed by suggestions,
+                separated by a blank line. Kept as separate paragraphs so the
+                second reads as advice rather than more explanation. */}
+            {String(answer.text).split("\n\n").map((para, i) => (
+              <Typography
+                key={i}
+                variant="body2"
+                sx={{
+                  color: i === 0 ? "text.primary" : "text.secondary",
+                  lineHeight: 1.75,
+                  mt: i ? 1.25 : 0,
+                }}
+              >
+                {para}
+              </Typography>
+            ))}
+          </Box>
+        )}
+
+        {answer && !answer.blocked && (
           <Box>
             <Typography variant="body2" sx={{ color: "text.primary", lineHeight: 1.75, mb: 1.5 }}>
-              {answer}
+              {answer.text}
             </Typography>
 
             {selectionPrompt && (

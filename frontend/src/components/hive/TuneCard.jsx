@@ -167,9 +167,24 @@ export default function TuneCard({
               {node.glyph}
             </Box>
           )}
-          <Typography variant="body2" fontWeight={600} noWrap>
-            {node.label}
-          </Typography>
+          <Box sx={{ minWidth: 0 }}>
+            <Typography variant="body2" fontWeight={600} noWrap>
+              {node.label}
+            </Typography>
+            {/* The name the code, the logs and the audit trail use. The
+                plain label above is for reading; this is for matching what
+                is on screen to a line in a trace, and renaming the nodes
+                should not have cost anyone that. */}
+            {node.technical && node.technical !== node.label && (
+              <Typography
+                variant="caption"
+                noWrap
+                sx={{ color: "text.disabled", fontSize: 10.5, letterSpacing: "0.04em" }}
+              >
+                {node.technical}
+              </Typography>
+            )}
+          </Box>
         </Stack>
 
         {planned ? (

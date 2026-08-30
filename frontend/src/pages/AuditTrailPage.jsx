@@ -28,7 +28,7 @@ function exportToCSV(decisions) {
 }
 
 export default function AuditTrailPage() {
-  const { decisions, loading } = useFirestoreAudit();
+  const { decisions, loading, error } = useFirestoreAudit();
   const [activeFilter, setActiveFilter] = useState("all");
 
   const filtered = useMemo(() => {
@@ -58,6 +58,25 @@ export default function AuditTrailPage() {
       <Box sx={{ maxWidth: 1000, mx: "auto", px: 3, py: 4 }}>
         {loading ? (
           <Typography variant="body2" color="text.secondary">Connecting to live log…</Typography>
+        ) : error ? (
+          <Box
+            sx={{
+              p: 2.5,
+              borderRadius: 2,
+              border: "1px solid",
+              borderColor: "warning.dark",
+              bgcolor: "rgba(245,158,11,0.08)",
+            }}
+          >
+            <Typography variant="body2" sx={{ fontWeight: 600, mb: 0.5 }}>
+              The live log could not be read
+            </Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ lineHeight: 1.65 }}>
+              The agent is still recording every decision — this page just cannot
+              reach them right now, so what you see below is nothing rather than
+              everything. Firestore reported: {error}
+            </Typography>
+          </Box>
         ) : (
           <>
             <FilterBar decisions={decisions} activeFilter={activeFilter} onChange={setActiveFilter} />

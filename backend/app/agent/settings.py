@@ -73,7 +73,8 @@ SPEC: dict[str, dict[str, dict]] = {
     "value": {
         "priority": {
             "kind": "enum",
-            "choices": ["auto", "discount", "price", "rating", "delivery_days"],
+            "choices": ["auto", "value", "discount", "price", "rating",
+                        "delivery_days"],
             "default": "auto",
             "label": "Rank by",
             "note": "Overrides the priority Intent parsed. 'auto' defers to the request.",

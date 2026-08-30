@@ -31,8 +31,8 @@ export const ROLES = {
     // What this party does, in their own words — used on the landing cards.
     tagline: "Shop with the agent",
     blurb:
-      "Give the agent a budget and a constraint. It searches live listings, "
-      + "screens them, and has to get past a risk gate before it can spend.",
+      "Give it a budget and a constraint. It has to get past the gate "
+      + "before it can spend.",
     home: "/console",
   },
   merchant: {
@@ -40,9 +40,9 @@ export const ROLES = {
     label: "Merchant",
     tagline: "Sell to agents",
     blurb:
-      "Publish a UCP storefront that AI buyers can discover, price and pay. "
-      + "Watch what they ask for, and what the store refuses them.",
-    home: "/console",
+      "Publish a storefront agents can discover and pay. Watch what they "
+      + "ask for — and what you refuse.",
+    home: "/merchant",
   },
 };
 

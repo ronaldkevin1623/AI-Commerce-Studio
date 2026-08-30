@@ -3,3 +3,9 @@ serviceAccountKey.json
 mandate_signing_key.pem
 __pycache__/
 venv/
+
+# Never rewritten by tooling, never committed. A rename script walked every
+# .json in this tree and replaced the project name inside this file, which
+# pointed the credentials at a project that does not exist and took the whole
+# backend down. Credentials are not text to be find-and-replaced.
+backend/serviceAccountKey.json

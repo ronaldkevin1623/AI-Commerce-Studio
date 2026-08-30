@@ -8,6 +8,7 @@ import LoadingState from "../components/shared/LoadingState";
 import TrackingStepper from "../components/orders/TrackingStepper";
 import OrderItemsTable from "../components/orders/OrderItemsTable";
 import OrderTotals from "../components/orders/OrderTotals";
+import RefundPanel from "../components/orders/RefundPanel";
 import { inr, shortDate } from "../components/orders/format";
 
 import { API_BASE } from "../config";
@@ -260,6 +261,14 @@ export default function OrderTrackingPage() {
       </Box>
 
       <OrderTotals totals={order.totals} priceIsConverted={order.price_is_converted} />
+
+      {/* Returning money belongs on the order, not in a support flow.
+          The panel asks Razorpay what is actually refundable and
+          disables itself with a stated reason when nothing is. */}
+      <RefundPanel
+        razorpayOrderId={order.razorpay_order_id}
+        onRefunded={() => window.location.reload()}
+      />
 
       {/* The gate decisions behind this order — the audit trail, scoped. */}
       {order.decisions?.length > 0 && (

@@ -15,22 +15,26 @@ export const TIER = { YOU: 0, HIVE: 1, CLUSTER: 2, SPECIALIST: 3, TOOL: 4 };
 export const TOOLS = [
   {
     id: "ollama",
-    label: "Ollama",
+    label: "The AI model",
+    technical: "Ollama · qwen2.5:7b",
     what: "Local LLM inference, qwen2.5:7b. Runs on this machine — no API key, no cloud round-trip, no per-token cost.",
   },
   {
     id: "ebay",
-    label: "eBay Browse API",
+    label: "eBay",
+    technical: "eBay Browse API",
     what: "OAuth2 client-credentials, item_summary/search. Production keyset, free tier. EBAY_US marketplace — India isn't supported by Browse, so prices are converted at a fixed approximate rate.",
   },
   {
     id: "firestore",
-    label: "Firestore",
+    label: "Records",
+    technical: "Firestore",
     what: "Firebase free tier. Collections: customers, decisions, orders, refunds. Every gated financial action is written here.",
   },
   {
     id: "razorpay",
     label: "Razorpay",
+    technical: "Razorpay API",
     what: "Test mode. Orders API, Checkout.js, Payments API, Refunds API.",
   },
 ];
@@ -38,8 +42,18 @@ export const TOOLS = [
 /** Tier 2 — the three halves of the product, each a surface you can enter. */
 export const CLUSTERS = [
   {
+    id: "storefront",
+    label: "Your shop",
+    technical: "Storefront",
+    glyph: "▥",
+    route: "/merchant/products",
+    state: "live",
+    what: "The seller half: the shop an agent can discover, read, buy from and be paid through. Every node here runs today.",
+  },
+  {
     id: "buyer",
-    label: "Buyer Hive",
+    label: "Buying for you",
+    technical: "Buyer Hive",
     glyph: "◉",
     route: "/console",
     state: "live",
@@ -47,7 +61,8 @@ export const CLUSTERS = [
   },
   {
     id: "growth",
-    label: "Growth Hive",
+    label: "Growing the shop",
+    technical: "Growth Hive",
     glyph: "◈",
     route: "/merchant",
     state: "partial",
@@ -55,7 +70,8 @@ export const CLUSTERS = [
   },
   {
     id: "aftercare",
-    label: "Post-Purchase",
+    label: "After you buy",
+    technical: "Post-Purchase",
     glyph: "◍",
     route: "/recovery",
     state: "partial",
@@ -70,10 +86,72 @@ export const CLUSTERS = [
  * look fuller would be exactly the kind of lie this project refuses.
  */
 export const SPECIALISTS = [
+  // ── Storefront ───────────────────────────────────────────────────────
+  //
+  // The merchant's own machinery. Listed as `live` because each one is
+  // exercised by a real request today: the discovery document is served,
+  // the catalogue is read by the buyer agent, sessions are opened, and
+  // settlement refuses a payment id Razorpay will not confirm.
+  {
+    id: "discovery",
+    label: "Lets agents find you",
+    technical: "UCP discovery",
+    glyph: "◈",
+    cluster: "storefront",
+    state: "live",
+    tools: [],
+    what: "Publishes the shop at /.well-known/ucp — the document an agent reads to learn what this store sells and how to pay it. Without it the shop is invisible to any buyer that is not a person with a browser.",
+    op: "GET /merchant/.well-known/ucp",
+  },
+  {
+    id: "catalogue",
+    label: "Your products",
+    technical: "Catalog",
+    glyph: "▤",
+    cluster: "storefront",
+    state: "live",
+    tools: ["firestore"],
+    what: "The products an agent can actually buy: active, in stock, priced in rupees. Anything draft or out of stock is withheld rather than shown and refused later.",
+    op: "GET /merchant/catalog",
+  },
+  {
+    id: "storecheckout",
+    label: "Opens the checkout",
+    technical: "Checkout session",
+    glyph: "▣",
+    cluster: "storefront",
+    state: "live",
+    tools: ["firestore"],
+    what: "Prices the basket from the shop's own record — never from what the buyer says it costs — and holds a session until it is paid for.",
+    op: "POST /merchant/checkout",
+  },
+  {
+    id: "settlement",
+    label: "Confirms you were paid",
+    technical: "Settlement",
+    glyph: "⬡",
+    cluster: "storefront",
+    state: "live",
+    tools: ["razorpay", "firestore"],
+    what: "Checks the payment with Razorpay before releasing stock. An agent that simply asserts it paid is refused — that refusal has already happened 24 times against this store.",
+    op: "POST /merchant/checkout/{id}/settle → razorpay.payment.fetch",
+  },
+  {
+    id: "fulfilment",
+    label: "Moves the order along",
+    technical: "Fulfilment",
+    glyph: "↦",
+    cluster: "storefront",
+    state: "live",
+    tools: ["firestore"],
+    what: "Paid to packed to shipped to delivered, forward only, and only once the money has actually arrived. The buyer's tracking page reads the same transitions.",
+    op: "POST /merchant/checkout/{id}/fulfil",
+  },
   // ── Buyer ────────────────────────────────────────────────────────────
   {
     id: "intent",
-    label: "Intent",
+    label: "Understands you",
+    technical: "Intent",
     glyph: "◈",
     cluster: "buyer",
     state: "live",
@@ -83,7 +161,8 @@ export const SPECIALISTS = [
   },
   {
     id: "scout",
-    label: "Scout",
+    label: "Finds products",
+    technical: "Scout",
     glyph: "◎",
     cluster: "buyer",
     state: "live",
@@ -93,7 +172,8 @@ export const SPECIALISTS = [
   },
   {
     id: "trust",
-    label: "Trust",
+    label: "Spots bad listings",
+    technical: "Trust",
     glyph: "◇",
     cluster: "buyer",
     state: "live",
@@ -103,7 +183,8 @@ export const SPECIALISTS = [
   },
   {
     id: "value",
-    label: "Value",
+    label: "Picks the best one",
+    technical: "Value",
     glyph: "◆",
     cluster: "buyer",
     state: "live",
@@ -113,7 +194,8 @@ export const SPECIALISTS = [
   },
   {
     id: "budget",
-    label: "Budget",
+    label: "Watches your spending",
+    technical: "Budget",
     glyph: "▤",
     cluster: "buyer",
     state: "live",
@@ -123,7 +205,8 @@ export const SPECIALISTS = [
   },
   {
     id: "risk",
-    label: "Risk",
+    label: "Approves or stops",
+    technical: "Risk",
     glyph: "⬡",
     cluster: "buyer",
     state: "live",
@@ -133,7 +216,8 @@ export const SPECIALISTS = [
   },
   {
     id: "payment",
-    label: "Payment",
+    label: "Takes the payment",
+    technical: "Payment",
     glyph: "▣",
     cluster: "buyer",
     state: "live",
@@ -145,7 +229,8 @@ export const SPECIALISTS = [
   // ── Growth ───────────────────────────────────────────────────────────
   {
     id: "insights",
-    label: "Insights",
+    label: "Sales insights",
+    technical: "Insights",
     glyph: "▦",
     cluster: "growth",
     state: "live",
@@ -155,7 +240,8 @@ export const SPECIALISTS = [
   },
   {
     id: "recovery",
-    label: "Cart Recovery",
+    label: "Wins back dropped carts",
+    technical: "Cart Recovery",
     glyph: "↺",
     cluster: "growth",
     state: "planned",
@@ -165,7 +251,8 @@ export const SPECIALISTS = [
   },
   {
     id: "offer",
-    label: "Offer",
+    label: "Tests discounts",
+    technical: "Offer",
     glyph: "%",
     cluster: "growth",
     state: "planned",
@@ -177,7 +264,8 @@ export const SPECIALISTS = [
   // ── Post-purchase ────────────────────────────────────────────────────
   {
     id: "negotiator",
-    label: "Negotiator",
+    label: "Asks the seller",
+    technical: "Negotiator",
     glyph: "✉",
     cluster: "aftercare",
     state: "live",
@@ -187,7 +275,8 @@ export const SPECIALISTS = [
   },
   {
     id: "refund",
-    label: "Refund",
+    label: "Handles refunds",
+    technical: "Refund",
     glyph: "⤺",
     cluster: "aftercare",
     state: "live",
@@ -197,7 +286,8 @@ export const SPECIALISTS = [
   },
   {
     id: "pricewatch",
-    label: "Price Watch",
+    label: "Watches the price",
+    technical: "Price Watch",
     glyph: "◷",
     cluster: "aftercare",
     state: "planned",

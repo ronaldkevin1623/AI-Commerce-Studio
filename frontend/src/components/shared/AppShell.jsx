@@ -1,13 +1,14 @@
 import { AppBar, Toolbar, Box, Typography, Chip, Stack, Snackbar } from "@mui/material";
 import CheckIcon from "@mui/icons-material/Check";
 import { Link, useLocation } from "react-router-dom";
-import ShoppingCartIcon from "@mui/icons-material/ShoppingCartOutlined";
 import ShoppingBagIcon from "@mui/icons-material/ShoppingBagOutlined";
 
 import { useCart } from "../../context/CartContext";
 import { useRole } from "../../context/RoleContext";
 import RoleSwitcher from "./RoleSwitcher";
 import AppSidebar from "./AppSidebar";
+import Logo from "./Logo";
+import Starfield from "./Starfield";
 
 // The only element on the page that scrolls. The bar and the sidebar are
 // pinned by the shell, so a long page no longer carries the navigation off
@@ -57,15 +58,25 @@ export default function AppShell({ children }) {
   const sidebarLayout = chosen && !onLanding;
 
   return (
-    <Box
-      sx={{
-        height: "100vh",
-        display: "flex",
-        flexDirection: "column",
-        overflow: "hidden",
-        bgcolor: "background.default",
-      }}
-    >
+    <>
+      {/* Behind everything, fixed, inert. The shell below is transparent so
+          this shows through the empty space; the bar, the sidebar and every
+          card keep their own opaque surfaces and are unchanged. */}
+      <Starfield />
+
+      <Box
+        sx={{
+          height: "100vh",
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
+          // Was background.default. Transparent so the stars are visible,
+          // with an explicit stacking context above the fixed layer.
+          bgcolor: "transparent",
+          position: "relative",
+          zIndex: 1,
+        }}
+      >
       <AppBar
         position="static"
         elevation={0}
@@ -97,7 +108,7 @@ export default function AppShell({ children }) {
                 justifyContent: "center",
               }}
             >
-              <ShoppingCartIcon sx={{ fontSize: 14, color: "text.primary" }} />
+              <Logo size={17} />
             </Box>
             <Typography fontWeight={600} color="text.primary">AI Commerce Studio</Typography>
           </Box>
@@ -204,6 +215,7 @@ export default function AppShell({ children }) {
           },
         }}
       />
-    </Box>
+      </Box>
+    </>
   );
 }

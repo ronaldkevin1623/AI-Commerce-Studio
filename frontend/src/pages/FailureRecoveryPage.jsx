@@ -30,11 +30,13 @@ export default function FailureRecoveryPage() {
             <Typography variant="body2" color="text.secondary" sx={{ maxWidth: 480, mx: "auto", mb: 2 }}>
               This page shows a real failure the moment one happens — nothing here is
               scripted. To see it populate, run a request in the Console, and when Razorpay's
-              checkout opens, complete the test card details, then click{" "}
-              <b>"Failure"</b> on the mock bank confirmation screen instead of "Success."
+              checkout opens, choose <b>Netbanking</b> and any bank, then click{" "}
+              <b>"Failure"</b> on the simulated bank screen instead of "Success."
             </Typography>
-            <Typography variant="caption" color="text.secondary" sx={{ display: "block", fontFamily: "monospace" }}>
-              Test card: 4111 1111 1111 1111 · any future expiry · any CVV
+            <Typography variant="caption" color="text.secondary" sx={{ display: "block" }}>
+              Netbanking, not a card: this Razorpay account accepts domestic Indian cards
+              only, so every card attempt fails before reaching the bank screen — which is
+              itself one of the failures recorded below.
             </Typography>
           </Box>
         )}

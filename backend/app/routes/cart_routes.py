@@ -22,6 +22,7 @@ from app.agent import merchant_client
 
 from app.agent.budget_agent import assess as budget_assess
 from app.agent.risk_gate import evaluate as risk_evaluate
+from app.agent import settings
 from app.agent.mandates import issue_intent_mandate, issue_cart_mandate, verify_chain
 from app.firebase_client import (
     get_or_create_customer,
@@ -40,6 +41,9 @@ class CartCheckout(BaseModel):
     items: list[dict]
     customer_email: str = "demo@commerce-studio.dev"
     customer_name: str = "Demo User"
+    # Set by the interface only after the person has been shown the amount
+    # they are exceeding and confirmed it a second time. Never defaulted on.
+    confirm_over_ceiling: bool = False
 
 
 def _total(items: list[dict]) -> int:
@@ -154,8 +158,44 @@ def _do_cart_checkout(req: CartCheckout, idempotency_key: str = None,
         allowed_venues={"ebay", "merchant"},
     )
 
-    decision = "blocked" if budget["status"] == "exceeded" else risk["decision"]
-    reason = budget["summary"] if budget["status"] == "exceeded" else risk["reason"]
+    over_ceiling = budget["status"] == "exceeded"
+
+    # The person's own ceiling, and the person is here saying they mean it.
+    # Everything the risk gate objects to still stands: this only clears the
+    # budget, and only when it was the sole objection.
+    # Both gates ask the same question — does a person agree to this amount?
+    # Neither is a statement that the purchase is unsafe.
+    needs_a_person = over_ceiling or risk["decision"] == "escalated"
+    hard_blocked = risk["decision"] == "blocked"
+
+    if needs_a_person and req.confirm_over_ceiling and not hard_blocked:
+        ceiling = settings.get("budget", "session_ceiling_inr") * 100
+        grounds = []
+        if over_ceiling:
+            grounds.append(f"₹{max(0, total - ceiling) / 100:,.2f} over their "
+                           f"₹{ceiling / 100:,.0f} session ceiling")
+        if risk["decision"] == "escalated":
+            grounds.append(risk["reason"])
+
+        log_decision(
+            action_type="human_authorised_spend",
+            amount_paise=total,
+            decision="allowed",
+            reason=(f"Person confirmed ₹{total / 100:,.2f} in the cart — "
+                    + "; ".join(grounds)
+                    + ". These bounds limit the agent's autonomy, not the "
+                      "account holder's own spending."),
+            customer_id=customer["id"],
+        )
+        over_ceiling = False
+        needs_a_person = False
+        risk = {**risk, "decision": "allowed",
+                "reason": risk["reason"] + " — confirmed by the person"}
+
+    decision = ("blocked" if hard_blocked else
+                "blocked" if over_ceiling else
+                risk["decision"])
+    reason = budget["summary"] if over_ceiling else risk["reason"]
 
     log_decision(
         action_type="cart_checkout_attempt",
@@ -166,10 +206,43 @@ def _do_cart_checkout(req: CartCheckout, idempotency_key: str = None,
     )
 
     if decision == "blocked":
+        # A ceiling the person can lift by saying so is a different refusal
+        # from one they cannot. Say which this is, so the interface can offer
+        # the choice instead of a dead end — and do not dock trust for it,
+        # because wanting to spend your own money is not suspicious.
+        if over_ceiling and not hard_blocked:
+            ceiling = settings.get("budget", "session_ceiling_inr") * 100
+            raise HTTPException(status_code=409, detail={
+                "status": "over_ceiling",
+                "reason": reason,
+                "total_paise": total,
+                "ceiling_paise": ceiling,
+                "excess_paise": max(0, total - ceiling),
+                "confirmable": True,
+                "action": "Confirm to buy anyway. The override is recorded in "
+                          "the audit trail.",
+            })
+
         adjust_trust_score(customer["id"], -5)
         raise HTTPException(status_code=403, detail=reason)
 
     if decision == "escalated":
+        # A person in the cart can answer this directly. The approvals screen
+        # still exists for the case it was built for — an external agent
+        # proposing a purchase with nobody in the room.
+        ceiling = settings.get("budget", "session_ceiling_inr") * 100
+        raise HTTPException(status_code=409, detail={
+            "status": "over_ceiling",
+            "reason": reason,
+            "total_paise": total,
+            "ceiling_paise": ceiling,
+            "excess_paise": max(0, total - ceiling),
+            "confirmable": True,
+            "action": "Confirm to authorise it yourself. The decision is "
+                      "recorded in the audit trail.",
+        })
+
+    if False:
         # Parked for a human, exactly like an external agent's proposal. The
         # cart is stored so the approval screen can show what was in it.
         proposal_id = f"prop-{uuid.uuid4().hex[:16]}"

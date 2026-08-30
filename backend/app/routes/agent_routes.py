@@ -11,17 +11,24 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
 from app.agent.ollama_agent import (
     parse_intent,
+    fast_intent,
+    merge_model_intent,
     rank_candidates,
     effective_priority,
     screen_relevance,
+    condition_preference,
+    condition_conflict,
 )
-from app.agent.catalog import search_catalog
+from app.agent.catalog import search_catalog, deduplicate
 from app.agent.risk_gate import evaluate as risk_evaluate
 from app.agent.trust_agent import assess as trust_assess
 from app.agent.budget_agent import assess as budget_assess
 from app.agent import settings
-from app.agent import clarifier
 from app.agent import refine as refiner
+from app.agent import router as turn_router
+from app.agent import answer as answerer
+from app.agent import preferences
+from app.agent import quality
 from app.agent.mandates import (
     allowed_venues,
     issue_intent_mandate,
@@ -39,6 +46,8 @@ from app.firebase_client import (
     save_run,
 )
 from app.razorpay_client import create_order
+from app.agent import merchant_client
+from app.firebase_client import db
 
 router = APIRouter()
 
@@ -50,7 +59,6 @@ _RESULTS_TTL_SECONDS = 1800
 
 # conversation id -> the clarifying answers already given in this thread.
 # Kept so a second search does not re-ask what was answered a minute ago.
-_ANSWERS: dict[str, dict] = {}
 
 
 def _remember(session_id, query, intent, candidates):
@@ -62,6 +70,20 @@ def _remember(session_id, query, intent, candidates):
     }
 
 
+def _remember_reason(session_id, reason):
+    """
+    Why this turn's pick won, kept for the next message to quote.
+
+    Stored separately because it is computed after the listings are — the
+    ranker needs the screened set before it can justify a choice — and
+    because "why did you pick that one" deserves the sentence the agent
+    actually gave rather than one reconstructed afterwards.
+    """
+    entry = _LAST_RESULTS.get(session_id) if session_id else None
+    if entry:
+        entry["pick_reason"] = reason
+
+
 def _recall(session_id):
     entry = _LAST_RESULTS.get(session_id) if session_id else None
     if not entry:
@@ -71,6 +93,40 @@ def _recall(session_id):
         return None
     return entry
 
+
+
+# How long the run will wait for the intent model once its answer is due.
+#
+# It has already had the whole catalogue fetch to work in, so this is a
+# backstop rather than a budget. Set because parse_intent("santhosh") ran
+# past two minutes — a bare name gives the model nothing to parse and it
+# keeps generating — and an unbounded await turned that into a console that
+# sat on "Matching catalog" forever.
+INTENT_MODEL_GRACE_SECONDS = 8
+
+
+async def _await_intent(task):
+    """
+    The model's reading of the request, or None if it could not supply one.
+
+    Losing it costs the run the model's priority and its fuller requirements.
+    It must never cost the run itself: the rule-derived intent is complete on
+    its own, which is why it is derived.
+    """
+    if task is None:
+        return None
+    try:
+        return await asyncio.wait_for(
+            asyncio.shield(task), timeout=INTENT_MODEL_GRACE_SECONDS)
+    except asyncio.TimeoutError:
+        task.cancel()
+        print(f"[agent] intent model did not answer within "
+              f"{INTENT_MODEL_GRACE_SECONDS}s — continuing on rules", flush=True)
+        return None
+    except Exception as exc:
+        print(f"[agent] intent model call failed, continuing on rules: {exc}",
+              flush=True)
+        return None
 
 @router.websocket("/ws/agent")
 async def agent_pipeline(websocket: WebSocket):
@@ -96,12 +152,74 @@ async def agent_pipeline(websocket: WebSocket):
             "events": [],
         }
 
-        # A follow-up to results already on screen narrows them; anything
-        # naming a different product starts over. Which one happened is said
-        # out loud, so a wrong guess is visible rather than silent.
+        # What kind of message is this? Narrowing, a question about what is
+        # on screen, a new search, or none of those. This used to be a
+        # two-way fork — narrow it or search for it — which meant every
+        # question became a search: "why did you pick that one" went to eBay
+        # as a query. Which route was taken is said out loud, so a wrong
+        # turn is visible rather than silent.
         previous = _recall(session_id)
+        turn = turn_router.classify(
+            user_text,
+            has_results=bool(previous and previous.get("candidates")),
+            previous_query=previous["query"] if previous else "")
+
+        if turn["route"] in ("question", "aside", "clarify"):
+            await _answer_without_searching(
+                websocket, turn, user_text, previous, session_id)
+            return
+
         decision = refiner.parse(user_text, previous["query"] if previous else "")
         refining = bool(previous and decision.get("refine"))
+
+        # A spec the current results do not contain is not a filter — it is
+        # the same request with one value changed.
+        #
+        # "512gb" after an iPhone search matched none of the twenty-four
+        # listings, because they were all 256GB. Filtering would have shown
+        # them anyway (a filter that empties the page is skipped), and
+        # searching for "512gb" alone lost the iPhone and returned SSDs. The
+        # subject is carried over and the storage swapped, so the query
+        # becomes what the person meant: the same phone, 512GB.
+        amended_query = None
+        if refining and (decision["ops"].get("attributes")):
+            wanted = decision["ops"]["attributes"]
+            present = [c for c in previous["candidates"]
+                       if all(w in (c.get("name") or "").lower() for w in wanted)]
+            if not present:
+                amended_query = refiner.amend(previous["query"], wanted)
+                refining = False
+                await _send(websocket, "step",
+                            f'None of the {len(previous["candidates"])} listings '
+                            f'found are {", ".join(wanted)} — searching again for '
+                            f'"{amended_query}"')
+
+        # The amended phrase stands in for what was typed, so intent parsing,
+        # screening and ranking all see the full request rather than a bare
+        # spec with no subject.
+        search_text = amended_query or user_text
+
+        def shaping_budget(intent_dict):
+            """
+            The budget allowed to influence which listing wins.
+
+            Zero unless the person named a figure. The ceiling still bounds
+            the search, but a default must never reach the stages that read a
+            budget as a statement of taste: the floor that discards listings
+            priced far below it, and the tie-break that prefers the dearer of
+            two equals because someone who says "₹30,000" is describing the
+            class of thing they want. Applied to an invented number, both
+            turn "iphone 17 pro" into a hunt for something near ₹5,000.
+            """
+            return (intent_dict.get("max_price_paise") or 0
+                    if intent_dict.get("budget_stated") else 0)
+
+        # Set on the fresh-search branch only; a refinement reuses the intent
+        # that was already parsed on the turn that produced these listings.
+        model_intent = None
+        # Bound here because the screen only runs on a fresh search;
+        # a refinement reuses listings already screened.
+        screened = None
 
         await _agent(websocket, "intent", "running", tools=["ollama"])
 
@@ -114,10 +232,26 @@ async def agent_pipeline(websocket: WebSocket):
             await _agent(websocket, "intent", "done", tools=[], summary=
                          f'{intent["category"]} · refined')
         else:
-            await _send(websocket, "step", "Parsing intent into category, budget and priority")
-            intent = parse_intent(user_text)
-            await _agent(websocket, "intent", "done", tools=["ollama"], summary=
-                         f"{intent['category']} · under ₹{intent['max_price_paise']/100:.0f} · by {intent['priority']}")
+            await _send(websocket, "step", "Reading the request")
+            # Rule-derived, and instant. The search phrase and the ceiling
+            # were already taken from the person's own words rather than the
+            # model's reading of them, so waiting on the model to produce two
+            # values that get overwritten anyway bought nothing but latency.
+            intent = fast_intent(search_text)
+
+            # The model still runs — it just runs alongside the search. Its
+            # answer is joined before ranking, which is the first stage that
+            # reads it.
+            model_intent = asyncio.create_task(
+                asyncio.to_thread(parse_intent, search_text))
+
+            # Say "no budget stated" rather than quoting the search bound.
+            # Printing a figure nobody typed is what made a ₹5,000 default
+            # look like the person's own limit.
+            bound = (f"under ₹{intent['max_price_paise'] / 100:,.0f}"
+                     if intent.get("budget_stated") else "no budget stated")
+            await _agent(websocket, "intent", "done", tools=[], summary=
+                         f"{intent['category']} · {bound} · by {intent['priority']}")
 
         # Sign the constraints BEFORE any listing is fetched, so the bounds
         # can't be quietly widened later to fit whatever the agent found.
@@ -127,6 +261,11 @@ async def agent_pipeline(websocket: WebSocket):
             "hash": mandate_digest(intent_jwt),
             "constraints": {
                 "max_amount_paise": intent["max_price_paise"],
+                # Whether that figure is the person's or ours. Printing a
+                # ₹10,00,000 search bound as "signed — under ₹10,00,000"
+                # states a spending permission nobody gave; what actually
+                # bounds spending is the risk gate and the session ceiling.
+                "budget_stated": bool(intent.get("budget_stated")),
                 "category": intent["category"],
                 "priority": intent["priority"],
             },
@@ -157,10 +296,11 @@ async def agent_pipeline(websocket: WebSocket):
             # with a ₹20,000 budget came back full of ₹3,000 handsets from 2016.
             bias = (intent.get("quality_bias") or "neutral").lower()
             sort = {"best": "-price", "cheapest": "price"}.get(bias)
-            budget = intent["max_price_paise"] / 100
+            scope = (f"under ₹{intent['max_price_paise'] / 100:,.0f}"
+                     if intent.get("budget_stated") else "at any price")
             await _send(websocket, "step",
-                         f"Matching catalog under ₹{budget:,.0f}" + {
-                             "best": " — highest-value first, since you asked for the best",
+                         f"Matching catalog {scope}" + {
+                             "best": " — best quality first, then how much of your budget it uses, since you asked for the best",
                              "cheapest": " — lowest price first",
                          }.get(bias, ""))
             # Off the event loop, deliberately.
@@ -172,20 +312,172 @@ async def agent_pipeline(websocket: WebSocket):
             # is an HTTP request back to our own server, and a blocked loop can
             # never serve it — discovery timed out every time, silently, and the
             # merchant's results just never appeared.
+            # New unless the person said otherwise. A marketplace prices
+            # open-box and refurbished stock below new, so any ranking that
+            # weighs price will surface them — and somebody who typed
+            # "iphone 17 pro" was asking for a phone, not for a cheaper one.
+            wanted_condition = condition_preference(search_text)
             candidates = await asyncio.to_thread(
                 search_catalog, intent["category"], intent["max_price_paise"], sort,
-                intent.get("requirements"),
+                intent.get("requirements"), wanted_condition["allow"],
             )
+            # Before anything counts them: a relisted offer appearing twice
+            # took two of the five places on screen.
+            candidates = deduplicate(candidates)
+
+            # The filter above is eBay's; this is ours, and it also covers
+            # the merchant store, whose products carry no eBay condition id.
+            # First-party stock is new, so it is kept whenever new is wanted.
+            allowed = wanted_condition["allow"]
+            before_condition = len(candidates)
+            candidates = [
+                c for c in candidates
+                if (str(c.get("condition_id") or "") in allowed
+                    or (c.get("source") == "merchant" and "1000" in allowed))
+                # A seller who ticks "New" and then writes "open box" in the
+                # title has told us twice, and the second answer is the one
+                # they had to type out. Only drops when the person did not
+                # ask for that condition anyway.
+                and not (condition_conflict(c)
+                         and not wanted_condition["stated"])
+            ]
+            set_aside = before_condition - len(candidates)
+            if wanted_condition["stated"]:
+                await _send(websocket, "step",
+                            f"Showing {wanted_condition['label']} listings only, "
+                            f"because you asked for them"
+                            + (f" — set aside {set_aside} in other conditions"
+                               if set_aside else ""))
+            elif set_aside:
+                await _send(websocket, "step",
+                            f"New only — set aside {set_aside} open-box, "
+                            f"refurbished or used listings. Say \"refurbished\" "
+                            f"or \"used\" if you want those too.")
+
+            # eBay matches every word, so a very specific request can return
+            # nothing at all. The search broadens rather than reporting an
+            # empty market — and says so, because searching for less than was
+            # asked for is not something to leave a person to infer.
+            try:
+                from app.agent.catalog import _search_ebay as _ebay_stage
+                used = getattr(_ebay_stage, "last_phrase", None)
+                asked = (intent["category"] or "").strip()
+                if used and used.lower() != asked.lower():
+                    await _send(
+                        websocket, "step",
+                        f'Nothing matched "{asked}" exactly — searched '
+                        f'"{used}" and kept the rest of your request as '
+                        f'requirements to filter on')
+            except Exception as exc:
+                print(f"[agent] broadening note skipped: {exc}", flush=True)
 
             if not candidates:
-                await _agent(websocket, "scout", "blocked", "No listings matched", "error",
-                             tools=["ebay"])
-                await _send(websocket, "error", "No products matched — try relaxing your budget")
+                # Why it is empty decides what is worth saying. A product
+                # that exists but costs more than the ceiling is a fact the
+                # person can act on; "no products matched" is not.
+                diagnosis = {}
+                try:
+                    from app.agent.catalog import _search_ebay as _ebay_stage
+                    diagnosis = getattr(_ebay_stage, "last_diagnosis", None) or {}
+                except Exception:
+                    pass
+
+                if diagnosis.get("reason") == "over_budget":
+                    short_by = diagnosis["cheapest_paise"] - intent["max_price_paise"]
+                    message = (
+                        f"Found {diagnosis['seen']} listings for "
+                        f"\"{diagnosis['phrase']}\", but the cheapest is "
+                        f"₹{diagnosis['cheapest_paise'] / 100:,.0f} — "
+                        f"₹{short_by / 100:,.0f} above your "
+                        f"₹{intent['max_price_paise'] / 100:,.0f}. "
+                        f"Nothing was bought. Raise the budget to about "
+                        f"₹{diagnosis['cheapest_paise'] / 100:,.0f} and I can "
+                        f"look again."
+                    )
+                    await _agent(websocket, "scout", "blocked",
+                                 "In stock, over budget", "warn", tools=["ebay"])
+                else:
+                    phrase = diagnosis.get("phrase") or intent["category"]
+                    # What is certain, then what to do — without asserting a
+                    # cause. The same sentence covers a misspelling, a product
+                    # eBay does not carry, and a word that is not a product at
+                    # all, and it cannot know which of those happened.
+                    message = (
+                        f"No listings matched \"{phrase}\" at any price, so "
+                        f"there was nothing to rank and nothing was bought.\n\n"
+                        f"Worth trying: check the spelling, drop a word or two "
+                        f"to widen it, or name the brand and model. eBay's "
+                        f"catalogue is also thin on India-market products, so "
+                        f"some things sold here are simply not listed there."
+                    )
+                    await _agent(websocket, "scout", "blocked",
+                                 "No listings matched", "error", tools=["ebay"])
+
+                await _send(websocket, "error", message)
                 await websocket.close()
                 return
 
             await _agent(websocket, "scout", "done", f"{len(candidates)} live listings retrieved",
                          tools=["ebay"])
+
+            # Relevance: does the listing actually answer the request? Nothing
+            # before this point reads the person's own words — Scout matches a
+            # price ceiling, Trust looks at price and seller, and neither can
+            # tell a camera phone from a ₹166 flip phone.
+            await _agent(websocket, "value", "running", tools=["ollama"])
+
+            # Join the model here — this is the first stage that reads anything
+            # only it can provide. By now it has had the whole fetch, the trust
+            # pass and the clarifying question to finish in, so it is usually
+            # already done and this waits on nothing.
+            model_reading = await _await_intent(model_intent)
+            if model_intent is not None and model_reading is None:
+                await _send(websocket, "step",
+                            "The intent model did not answer in time — ranking "
+                            "on the rules read from your own words")
+            intent = merge_model_intent(intent, model_reading)
+
+            await _send(websocket, "step", "Screening listings against what you asked for")
+            screened = screen_relevance(candidates, search_text,
+                                        intent.get("requirements"),
+                                        budget_paise=shaping_budget(intent))
+            candidates = screened["candidates"]
+            await _send(websocket, "step", screened["summary"])
+            if screened.get("attribute_note"):
+                await _send(websocket, "step", screened["attribute_note"])
+
+            # Asked for the best? Then a model several generations behind a
+            # newer one in the same results is not a candidate for it. This
+            # compares model numbers within a line — arithmetic on the data —
+            # and makes no claim about what is still in production.
+            if (intent.get("quality_bias") or "").lower() == "best":
+                try:
+                    from app.agent import generation
+                    recent = generation.drop_superseded(candidates)
+                    if recent["dropped"]:
+                        candidates = recent["candidates"]
+                        await _send(websocket, "step", recent["note"])
+                except Exception as exc:
+                    print(f"[agent] generation check skipped: {exc}", flush=True)
+
+            # What this person has actually paid for before, used only to break
+            # ties among listings that already answer the request. Built from
+            # captured payments — an abandoned order says what was considered,
+            # not what was chosen.
+            try:
+                profile = await asyncio.to_thread(preferences.build, customer["id"])
+                if profile.get("confidence") == "usable":
+                    tuned = preferences.apply(candidates, profile,
+                                              intent.get("requirements"))
+                    if tuned["applied"]:
+                        candidates = tuned["candidates"]
+                        await _send(websocket, "step", tuned["note"])
+                elif profile.get("purchases"):
+                    # Say why it was not used, rather than silently not using it.
+                    await _send(websocket, "step", profile["summary"])
+            except Exception as exc:
+                # Personalisation must never take down a purchase run.
+                print(f"[preferences] skipped: {exc}", flush=True)
 
             # Trust runs before ranking so suspect listings never become the
             # recommendation in the first place.
@@ -220,40 +512,12 @@ async def agent_pipeline(websocket: WebSocket):
                 if trusted:
                     candidates = trusted
 
-            # ── Ask before spending ──────────────────────────────────────────
-            # The agent has read one sentence and is about to commit money on
-            # what it inferred from it. These questions are built from the
-            # listings actually retrieved — the conditions present, the makers
-            # that recur, the real price split — so every option offered is one
-            # the result set can honour. Skipping leaves the results untouched.
-            questions = clarifier.build(candidates, intent["category"])
+            # Nothing is asked before the results are shown. The person came
+            # with a sentence, and the next thing they should see is products
+            # — not a form built out of whatever happened to vary in the
+            # result set. Narrowing happens in conversation, once there is
+            # something concrete to narrow.
             quantity = 1
-            remembered = _ANSWERS.get(session_id) if session_id else None
-
-            if remembered:
-                # Already answered in this thread. Reapplying is not the same
-                # as assuming — these are the person's own words from a
-                # moment ago, and the step line says they were reused.
-                refined = clarifier.apply(candidates, remembered)
-                candidates = refined["candidates"]
-                quantity = refined["quantity"]
-                await _send(websocket, "step",
-                            f"Carrying over what you told me earlier — {refined['summary']}")
-            elif questions:
-                await _send(websocket, "clarify", {
-                    "questions": questions,
-                    "candidate_count": len(candidates),
-                })
-                reply = await websocket.receive_json()
-                answers = reply.get("answers") or {}
-                if session_id and answers:
-                    _ANSWERS[session_id] = answers
-                refined = clarifier.apply(candidates, answers)
-                candidates = refined["candidates"]
-                quantity = refined["quantity"]
-                await _send(websocket, "step", refined["summary"])
-                if refined["applied"]:
-                    await _agent(websocket, "value", "running", tools=[])
 
         # Show the top real candidates (with clickable links) before narrowing
         # to one — this is what the "top matching products" panel renders
@@ -261,8 +525,41 @@ async def agent_pipeline(websocket: WebSocket):
         # used to sort by discount unconditionally, so the biggest markdown
         # led the carousel even when nobody mentioned discounts — which put
         # an 80%-off flip phone at the front of a camera-phone search.
+        # Real product reviews for the listings that could actually win.
+        # Seller reputation is always present; stars are not, and the ones
+        # that have them deserve to be judged on them.
+        try:
+            from app.agent.ebay_client import enrich_reviews
+            candidates = await asyncio.to_thread(enrich_reviews, candidates, 8)
+        except Exception as exc:
+            print(f"[quality] review lookup skipped: {exc}", flush=True)
+
+        quality.annotate(candidates)
+        reviewed = [c for c in candidates if (c.get("review_count") or 0) > 0]
+        if reviewed:
+            await _send(websocket, "step",
+                        f"Read product reviews on {len(reviewed)} of "
+                        f"{len(candidates)} listings — the rest are judged on "
+                        f"seller record and condition alone")
+        else:
+            await _send(websocket, "step",
+                        "None of these listings carry product reviews, so "
+                        "quality is judged on seller record and condition")
+
+        # Score on what is known now — seller record and condition. The
+        # review lookup below refines these before the pick is made.
+        quality.annotate(candidates)
         effective_sort = effective_priority(intent["priority"])
+        # Read from the intent rather than a variable set on one branch only:
+        # a refinement never runs the search block, and the rating sorter
+        # below closes over this.
+        bias = (intent.get("quality_bias") or "neutral").lower()
         sort_keys = {
+            # The same key the recommendation is computed with, so the strip
+            # and the pick cannot disagree about what "best" means.
+            "value": lambda p: quality.value_key(
+                p, shaping_budget(intent),
+                (intent.get("quality_bias") or "neutral").lower()),
             "discount": lambda p: (-(p.get("discount_percent") or 0), p["price_paise"]),
             "price": lambda p: (p["price_paise"],),
             "delivery_days": lambda p: (p.get("delivery_days") or 99, p["price_paise"]),
@@ -301,15 +598,6 @@ async def agent_pipeline(websocket: WebSocket):
 
         await _send(websocket, "candidates", top_candidates)
 
-        # Relevance: does the listing actually answer the request? Nothing
-        # before this point reads the person's own words — Scout matches a
-        # price ceiling, Trust looks at price and seller, and neither can
-        # tell a camera phone from a ₹166 flip phone.
-        await _agent(websocket, "value", "running", tools=["ollama"])
-        await _send(websocket, "step", "Screening listings against what you asked for")
-        screened = screen_relevance(candidates, user_text, intent.get("requirements"))
-        candidates = screened["candidates"]
-        await _send(websocket, "step", screened["summary"])
         # Announce the priority the ranker will really use, not the one that
         # was parsed — a pin on the Value node overrides the request wording,
         # and the stream should say so as it happens.
@@ -320,12 +608,19 @@ async def agent_pipeline(websocket: WebSocket):
         result = rank_candidates(
             candidates,
             intent["priority"],
-            user_text=user_text,
+            user_text=search_text,
             requirements=intent.get("requirements"),
-            budget_paise=intent.get("max_price_paise") or 0,
+            budget_paise=shaping_budget(intent),
+            unmet=(screened or {}).get("unmet_attributes"),
+            # "best … under N" is a request about the product, so price
+            # leads within a wider quality band. See quality.value_key.
+            bias=(intent.get("quality_bias") or "neutral").lower(),
         )
         product = result["product"]
         summary = result["reason"]
+        # Kept so the next message can be "why that one" and get this
+        # sentence back rather than a reconstruction of it.
+        _remember_reason(session_id, result["reason"])
         if effective != intent["priority"]:
             summary = f"{summary} (ranked by {effective}, pinned on the Value node)"
         await _agent(websocket, "value", "done", summary, tools=["ollama"])
@@ -397,16 +692,40 @@ async def agent_pipeline(websocket: WebSocket):
         await _send(websocket, "step", f"Budget: {budget['summary']}")
 
         if budget["status"] == "exceeded":
+            # The person clicked a button with the amount written on it.
+            #
+            # This used to end the run: "₹86,318 would exceed the ₹20,000
+            # ceiling", socket closed, nothing to do. But the ceiling bounds
+            # what the AGENT may spend without being asked — it was never a
+            # limit on the account holder, and the cart already treats it
+            # that way. Here the button reads "Buy now · ₹86,318", so the
+            # click is the authorisation; asking again would be asking a
+            # question already answered.
+            #
+            # Nothing else is relaxed. The risk gate still runs below and
+            # still stops duplicates, velocity, dead stock and unauthorised
+            # venues, and this decision is written to the audit trail as the
+            # person's own rather than disappearing into a successful order.
+            ceiling = settings.get("budget", "session_ceiling_inr") * 100
+            excess = max(0, budget.get("projected_paise", 0) - ceiling)
             log_decision(
-                action_type="purchase_attempt",
+                action_type="human_authorised_spend",
                 amount_paise=product["price_paise"],
-                decision="blocked",
-                reason=budget["summary"],
+                decision="allowed",
+                reason=(f"Person bought at ₹{product['price_paise'] / 100:,.2f} with "
+                        f"the amount shown on the button"
+                        + (f", ₹{excess / 100:,.2f} above their "
+                           f"₹{ceiling / 100:,.0f} session ceiling" if excess else "")
+                        + ". That ceiling bounds what the agent may spend "
+                          "unattended, not what the account holder may spend."),
                 customer_id=customer["id"],
             )
-            await _send(websocket, "risk_gate", {"decision": "blocked", "reason": budget["summary"]})
-            await websocket.close()
-            return
+            await _send(websocket, "step",
+                        f"Above your ₹{ceiling / 100:,.0f} session ceiling — going "
+                        f"ahead because you chose this price yourself, and "
+                        f"recording it in the audit trail as your decision.")
+            await _agent(websocket, "budget", "done",
+                         "Authorised by you", tools=["firestore"])
 
         await _agent(websocket, "risk", "running", tools=["firestore"])
         await _send(websocket, "step", "Running risk check before order creation")
@@ -438,7 +757,41 @@ async def agent_pipeline(websocket: WebSocket):
             await websocket.close()
             return
 
-        if risk_result["decision"] == "escalated":
+        # An escalation asks a question. Sometimes the click already answered
+        # it.
+        #
+        # The gate escalates for two different reasons, and only one of them
+        # is "does a person agree to spend this much". That one was answered
+        # by pressing a button reading "Buy now · ₹86,318", and asking again
+        # on the next screen is asking twice.
+        #
+        # The other is velocity — several purchases inside a few minutes —
+        # which is not a question about this price at all. It is the guard
+        # against a loop making many individually reasonable purchases, and
+        # no amount printed on a button answers it. That one still stops and
+        # asks, as does anything blocked outright.
+        auto_approve = settings.get("risk", "auto_approve_limit_inr") * 100
+        amount_only = (risk_result["decision"] == "escalated"
+                       and (product.get("price_paise") or 0) > auto_approve)
+
+        if amount_only:
+            log_decision(
+                action_type="human_authorised_spend",
+                amount_paise=product["price_paise"],
+                decision="allowed",
+                reason=(f"{risk_result['reason']} — authorised by the person at "
+                        f"the point of purchase, with the amount shown on the "
+                        f"button they pressed."),
+                customer_id=customer["id"],
+            )
+            await _send(websocket, "step",
+                        "Above the amount the agent may spend unattended — "
+                        "allowed because you chose it yourself, and recorded "
+                        "as your decision.")
+            risk_result = {**risk_result, "decision": "allowed",
+                           "reason": risk_result["reason"] + " — authorised by you"}
+            await _send(websocket, "risk_gate", risk_result)
+        elif risk_result["decision"] == "escalated":
             # Frontend shows a real Approve/Deny UI and sends back a decision
             approval = await websocket.receive_json()
             if not approval.get("approved"):
@@ -480,16 +833,78 @@ async def agent_pipeline(websocket: WebSocket):
             return
 
         await _agent(websocket, "payment", "running", tools=["razorpay", "firestore"])
-        await _send(websocket, "step", "Creating Razorpay order")
+
         # Razorpay caps `receipt` at 56 chars, and live eBay item IDs are
         # long — so use a short hash of the product/customer pair plus a
         # timestamp, keeping it unique without risking the limit.
         receipt_id = f"cp-{uuid.uuid4().hex[:16]}"
-        razorpay_order = create_order(
-            amount_paise=product["price_paise"],
-            receipt=receipt_id,
-            notes={"customer_id": customer["id"], "product_id": str(product["id"])},
-        )
+        from_merchant = (product.get("source") == "merchant")
+        checkout_session = None
+
+        if from_merchant:
+            # Same handshake the cart performs. Without it the buyer is
+            # charged and the seller is never told: settlement looks for a
+            # session id, finds none, and reports nothing wrong.
+            await _send(websocket, "step",
+                        f"Opening a checkout with "
+                        f"{product.get('merchant_name') or 'the merchant'}")
+            try:
+                checkout_session = await asyncio.to_thread(
+                    merchant_client.open_checkout,
+                    [{"id": product["id"], "quantity": quantity}],
+                    {"customer_id": customer["id"], "name": customer.get("name"),
+                     "email": customer.get("email")},
+                    f"agent-{uuid.uuid4().hex}",
+                )
+            except Exception as exc:
+                log_decision(
+                    action_type="merchant_checkout_failed",
+                    amount_paise=product["price_paise"],
+                    decision="blocked",
+                    reason=f"Could not open a checkout with the seller: {exc}",
+                    customer_id=customer["id"],
+                )
+                await _agent(websocket, "payment", "blocked",
+                             "The seller did not open a checkout", "error",
+                             tools=["razorpay"])
+                await _send(websocket, "error",
+                            "The seller could not open a checkout for this item. "
+                            "Nothing has been charged.")
+                await websocket.close()
+                return
+
+            # The gate approved a number. A different number is not covered
+            # by that approval.
+            charged = checkout_session.get("total_paise")
+            if charged != product["price_paise"]:
+                log_decision(
+                    action_type="merchant_price_mismatch",
+                    amount_paise=charged or 0,
+                    decision="blocked",
+                    reason=(f"Gate approved Rs{product['price_paise'] / 100:,.2f} but "
+                            f"the seller's session is for Rs{(charged or 0) / 100:,.2f}"),
+                    customer_id=customer["id"],
+                    order_id=checkout_session.get("razorpay_order_id"),
+                )
+                await _agent(websocket, "payment", "blocked",
+                             "The seller's price changed", "error", tools=["razorpay"])
+                await _send(websocket, "error",
+                            "The seller's price changed while this was being "
+                            "approved. Nothing was charged — try again.")
+                await websocket.close()
+                return
+
+            # The merchant priced it and created the order; we reference it.
+            razorpay_order = {"id": checkout_session["razorpay_order_id"],
+                              "receipt": receipt_id}
+        else:
+            await _send(websocket, "step", "Creating Razorpay order")
+            razorpay_order = create_order(
+                amount_paise=product["price_paise"],
+                receipt=receipt_id,
+                notes={"customer_id": customer["id"],
+                       "product_id": str(product["id"])},
+            )
 
         save_order(
             order_id=razorpay_order["receipt"],
@@ -504,6 +919,15 @@ async def agent_pipeline(websocket: WebSocket):
                 "verified_at": int(time.time()),
             },
         )
+
+        # What settlement reads. Written for both venues so an order always
+        # says which one it came from rather than leaving it to be inferred.
+        db.collection("orders").document(razorpay_order["receipt"]).update({
+            "source": "merchant" if from_merchant else "ebay",
+            "merchant_checkout_session": (checkout_session or {}).get("session_id"),
+            "merchant_id": product.get("merchant_id") if from_merchant else None,
+            "merchant_name": product.get("merchant_name") if from_merchant else None,
+        })
 
         adjust_trust_score(customer["id"], 2)
 
@@ -567,6 +991,10 @@ def _outcome(events: list[dict]) -> str:
             return "blocked"
     if "await_selection" in types:
         return "abandoned_at_selection"
+    # A turn that answered a question is complete, not incomplete — it just
+    # never had a product to end on.
+    if "reply" in types:
+        return "answered"
     return "incomplete"
 
 
@@ -588,6 +1016,64 @@ def _record(ws: WebSocket, event_type: str, payload) -> None:
         # pacing — including how long the model actually took to think.
         "t": round(time.time() - recorder["t0"], 3),
     })
+
+
+async def _answer_without_searching(ws: WebSocket, turn: dict, user_text: str,
+                                    previous: dict, session_id: str):
+    """
+    A turn that ends in a sentence rather than a search.
+
+    Two routes arrive here. A question is answered from the listings already
+    on screen — the answerer reads their fields and quotes the seller's own
+    words, and says the listing is silent when it is, because the alternative
+    is inventing a fact about something someone is about to buy.
+
+    An aside gets the truth about what this is: a shopping agent. Saying so
+    costs a sentence and is worth more than a guessed answer — a system that
+    knows where its knowledge ends is easier to trust with money than one
+    that always has something to say.
+
+    Both are logged like any other turn, so the audit trail shows what was
+    asked even when nothing was searched or spent.
+    """
+    await _send(ws, "step", f"Read as a question about the results — {turn['reason']}"
+                if turn["route"] == "question"
+                else f"Not a product request — {turn['reason']}")
+
+    if turn["route"] == "question":
+        candidates = (previous or {}).get("candidates") or []
+        reason = (previous or {}).get("pick_reason") or ""
+        text = answerer.answer(user_text, candidates, reason)
+    elif turn["route"] == "clarify":
+        # Ask instead of guessing. Whichever way this message was meant, the
+        # person can say so in three words — and the results already on
+        # screen are left alone, so an ambiguous line cannot replace what
+        # they were looking at.
+        # The router's `subject` is an unordered set of leftover words, which
+        # quoted back reads as "capital france what" — worse than not
+        # quoting at all. The person knows what they typed; what they need
+        # is the boundary and the way forward.
+        text = ("I only search marketplaces, so I cannot answer that from "
+                "general knowledge. If it is something you want to buy, say "
+                "what you are shopping for and I will look for it."
+                # Only true when there are some. Said because the reassurance
+                # is the point: an ambiguous message costs nothing.
+                + (" The results above are untouched."
+                   if (previous or {}).get("candidates") else ""))
+    else:
+        text = ("I search real marketplaces, compare what they return, and buy "
+                "and track orders — that is the whole of what I do. I do not "
+                "answer general questions, because I would only be guessing. "
+                "Tell me what you are shopping for, or paste a photo of it.")
+
+    await _send(ws, "reply", text)
+    # Close explicitly. A search run ends by falling out of the handler and
+    # letting the server tear the socket down, but this turn answered in a
+    # quarter of a second and the socket was still open fifteen seconds
+    # later — leaving the composer disabled, because the interface treats an
+    # open socket as a run still thinking. Nothing more will be received on
+    # this turn, so say so rather than relying on teardown to happen.
+    await ws.close()
 
 
 async def _send(ws: WebSocket, event_type: str, payload):

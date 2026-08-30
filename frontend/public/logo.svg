@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="AI Commerce Studio">
+  <!--
+    A shopping bag with a spark inside it: commerce, carried out by something
+    that reasons. Drawn on a 64px grid with 4px strokes so it survives being
+    scaled down to a 16px favicon, where thin lines disappear.
+
+    Flat colour rather than a gradient — the mark sits on a near-black bar in
+    the app and on whatever colour a browser paints behind a tab, and a
+    gradient reads as mud at that size.
+  -->
+  <rect width="64" height="64" rx="14" fill="#0A0A0B"/>
+
+  <!-- The bag: a soft-cornered body with handles above it. -->
+  <path d="M16 24h32l-2.6 24.2a4 4 0 0 1-4 3.8H22.6a4 4 0 0 1-4-3.8L16 24Z"
+        fill="none" stroke="#ECECEE" stroke-width="4"
+        stroke-linejoin="round"/>
+  <path d="M25 24v-4.5a7 7 0 0 1 14 0V24"
+        fill="none" stroke="#ECECEE" stroke-width="4" stroke-linecap="round"/>
+
+  <!--
+    The spark. Four points rather than a literal star: the concave sides read
+    as a highlight instead of decoration, and it stays legible when the whole
+    mark is 16 pixels wide.
+  -->
+  <path d="M32 30.5c1.1 3.4 2.6 4.9 6 6-3.4 1.1-4.9 2.6-6 6-1.1-3.4-2.6-4.9-6-6 3.4-1.1 4.9-2.6 6-6Z"
+        fill="#22C55E"/>
+</svg>

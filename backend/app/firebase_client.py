@@ -1,3 +1,4 @@
+import time
 import firebase_admin
 from firebase_admin import credentials, firestore
 from app.config import FIREBASE_CREDENTIALS_PATH
@@ -90,11 +91,25 @@ def save_order(order_id: str, razorpay_order_id: str, amount_paise: int,
     db.collection("orders").document(order_id).set(payload)
 
 
-def update_order_status(razorpay_order_id: str, status: str):
+def update_order_status(razorpay_order_id: str, status: str,
+                        payment_id: str = None):
+    """
+    Move an order to a new status, recording the payment behind it.
+
+    The payment id is what makes "paid" checkable: anyone can take it to
+    Razorpay and confirm the capture independently. Without it a paid order
+    is just a field somebody set, and cannot be told apart from one that was.
+    """
     orders = db.collection("orders").where(
         "razorpay_order_id", "==", razorpay_order_id).limit(1).get()
-    if orders:
-        orders[0].reference.update({"status": status})
+    if not orders:
+        return
+
+    update = {"status": status}
+    if payment_id:
+        update["razorpay_payment_id"] = payment_id
+        update["paid_at"] = int(time.time())
+    orders[0].reference.update(update)
 
 
 def order_by_razorpay_id(razorpay_order_id: str) -> dict | None:

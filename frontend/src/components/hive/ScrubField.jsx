@@ -55,18 +55,33 @@ export default function ScrubField({
 
   const shown = typing ?? value?.toLocaleString("en-IN");
 
+  // Where this setting sits between its own bounds. Not a value in its own
+  // right — just the position of the real one, which is why the number
+  // beside it stays in ₹ or seconds or per cent rather than becoming a
+  // second scale to reconcile.
+  const span = (max ?? 100) - (min ?? 0);
+  const share = span > 0
+    ? Math.min(1, Math.max(0, ((Number(value ?? 0)) - (min ?? 0)) / span))
+    : 0;
+
+  /** The value under the pointer, snapped to whole units. */
+  const fromTrack = (event) => {
+    const box = event.currentTarget.getBoundingClientRect();
+    if (!box.width) return Number(value ?? 0);
+    const ratio = Math.min(1, Math.max(0, (event.clientX - box.left) / box.width));
+    return clamp(Math.round((min ?? 0) + ratio * span));
+  };
+
   return (
     <Tooltip title={hint ?? ""} placement="top" enterDelay={600} disableHoverListener={!hint}>
       <Box
         component="label"
         sx={{
-          display: "flex",
-          alignItems: "center",
-          gap: 0.5,
-          height: 28,
+          display: "block",
           minWidth: 0,
-          pl: 0.5,
-          pr: 0.75,
+          px: 0.75,
+          pt: 0.4,
+          pb: 0.75,
           borderRadius: 1.5,
           bgcolor: active ? "rgba(59,130,246,0.14)" : "rgba(255,255,255,0.05)",
           boxShadow: scrubbing
@@ -78,6 +93,8 @@ export default function ScrubField({
           transition: "background-color 200ms, box-shadow 200ms",
         }}
       >
+        {/* Row one: the label you can still scrub, and the exact number. */}
+        <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, height: 22, minWidth: 0 }}>
         {/* The label is the scrub handle. */}
         <Box
           component="span"
@@ -180,6 +197,62 @@ export default function ScrubField({
             {suffix}
           </Box>
         )}
+        </Box>
+
+        {/* The same value, as something that obviously slides.
+​
+            Scrubbing a label sideways is precise and completely invisible —
+            nobody discovers it, so the dials read as captions rather than
+            controls. The track spans this dial's REAL range: left is its
+            minimum, right is its maximum, and the fill is where the setting
+            actually sits between them. There is no separate 0–100 number,
+            because a percentage that mapped onto ₹ or seconds would be a
+            second figure to reconcile and the first one people misread. */}
+        <Box
+          role="slider"
+          aria-label={`${label} slider`}
+          aria-valuemin={min}
+          aria-valuemax={max}
+          aria-valuenow={Number(value ?? 0)}
+          onPointerDown={(e) => {
+            if (disabled) return;
+            e.currentTarget.setPointerCapture(e.pointerId);
+            setScrubbing(true);
+            onChange(fromTrack(e));
+          }}
+          onPointerMove={(e) => {
+            if (disabled || !e.currentTarget.hasPointerCapture?.(e.pointerId)) return;
+            onChange(fromTrack(e));
+          }}
+          onPointerUp={(e) => {
+            e.currentTarget.releasePointerCapture?.(e.pointerId);
+            setScrubbing(false);
+          }}
+          sx={{
+            mt: 0.9, height: 14, display: "flex", alignItems: "center",
+            cursor: disabled ? "default" : "pointer", touchAction: "none",
+          }}
+        >
+          <Box sx={{ position: "relative", width: "100%", height: 4, borderRadius: 2,
+                     bgcolor: "rgba(255,255,255,0.09)" }}>
+            <Box sx={{
+              position: "absolute", left: 0, top: 0, bottom: 0,
+              width: `${share * 100}%`, borderRadius: 2,
+              bgcolor: disabled ? "rgba(255,255,255,0.2)"
+                : scrubbing ? "primary.light" : "primary.main",
+              transition: scrubbing ? "none" : "width 120ms ease",
+            }} />
+            <Box sx={{
+              position: "absolute", top: "50%", left: `${share * 100}%`,
+              transform: "translate(-50%, -50%)",
+              width: scrubbing ? 13 : 10, height: scrubbing ? 13 : 10,
+              borderRadius: "50%",
+              bgcolor: disabled ? "rgba(255,255,255,0.25)" : "primary.light",
+              border: "2px solid", borderColor: "background.paper",
+              transition: "width 120ms ease, height 120ms ease",
+            }} />
+          </Box>
+        </Box>
       </Box>
     </Tooltip>
   );

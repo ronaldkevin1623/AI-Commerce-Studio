@@ -267,6 +267,7 @@ def _notes(summary: dict, market: dict) -> list[dict]:
     if summary["orders"] and not summary["orders_paid"]:
         notes.append({
             "tone": "blocked",
+            "headline": f"No payment captured on any of {summary['orders']} orders",
             "text": (
                 f"None of the {summary['orders']} orders created has been paid. "
                 f"₹{summary['stranded_paise'] / 100:,.0f} of real Razorpay orders exist "
@@ -277,6 +278,7 @@ def _notes(summary: dict, market: dict) -> list[dict]:
     elif summary["conversion_rate"] is not None:
         notes.append({
             "tone": "ok",
+            "headline": f"{summary['conversion_rate']}% of orders captured",
             "text": (
                 f"{summary['conversion_rate']}% of created orders were captured "
                 f"(₹{summary['captured_paise'] / 100:,.0f})."
@@ -307,6 +309,7 @@ def _notes(summary: dict, market: dict) -> list[dict]:
             )
         notes.append({
             "tone": "warn",
+            "headline": "The funnel gap is a storage artefact, not drop-off",
             "text": (
                 f"{summary['attempts']} purchase attempts produced only {summary['orders']} order "
                 f"records, and blocks and escalations account for none of the gap. {cause} "
@@ -319,6 +322,7 @@ def _notes(summary: dict, market: dict) -> list[dict]:
     if summary["abandonment_rate"] is not None:
         notes.append({
             "tone": "warn" if summary["abandonment_rate"] >= 25 else "ok",
+            "headline": f"{summary['abandonment_rate']}% of runs ended by the person",
             "text": (
                 f"{summary['abandonment_rate']}% of started runs were abandoned by the person "
                 f"({summary['abandoned']} of {summary['attempts'] + summary['abandoned']}). "
@@ -331,6 +335,7 @@ def _notes(summary: dict, market: dict) -> list[dict]:
         median_discount = market["discount_percentiles"].get("median")
         notes.append({
             "tone": "ok",
+            "headline": f"{market['discounted_share']}% of listings carried a discount",
             "text": (
                 f"{market['discounted_share']}% of the {market['listings_seen']} live listings "
                 f"seen across {market['scans']} searches carried a discount"
@@ -341,6 +346,7 @@ def _notes(summary: dict, market: dict) -> list[dict]:
     else:
         notes.append({
             "tone": "thin",
+            "headline": "Not enough listings observed yet",
             "text": (
                 f"Price and discount charts need at least {MIN_SAMPLE} observed listings; "
                 f"there are {market['sample']}. Run a few searches from the console and they "
@@ -351,6 +357,7 @@ def _notes(summary: dict, market: dict) -> list[dict]:
     if summary["config_changes"]:
         notes.append({
             "tone": "ok",
+            "headline": f"{summary['config_changes']} config changes, excluded",
             "text": (
                 f"{summary['config_changes']} agent configuration changes are logged separately "
                 "and deliberately excluded from these funnel figures — tuning the hive is not "

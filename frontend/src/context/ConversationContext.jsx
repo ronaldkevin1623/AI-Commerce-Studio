@@ -204,8 +204,110 @@ export function ConversationProvider({ children }) {
     [sessions]
   );
 
+  /**
+   * Search from a photograph, as a turn in the same conversation.
+   *
+   * This is a request/response rather than a streamed run, but it produces
+   * exactly what a typed search produces — steps, then candidates — so it
+   * is pushed into the same event list and drawn by the same turn renderer.
+   * A separate results view would have been less code today and two
+   * divergent product lists by next week.
+   */
+  const startPhotoSearch = useCallback(
+    async ({ imageB64, note = "" }) => {
+      const label = note.trim() ? `Photo · ${note.trim()}` : "Search by photo";
+      const snapshot = liveRef.current;
+
+      setSessions((prev) => {
+        const archived =
+          snapshot.query && snapshot.events.length
+            ? prev.map((s) =>
+                s.id === activeSessionId
+                  ? {
+                      ...s,
+                      title: s.title ?? snapshot.query,
+                      turns: [
+                        ...s.turns,
+                        { id: `t-${Date.now()}`, query: snapshot.query, events: snapshot.events },
+                      ],
+                    }
+                  : s
+              )
+            : prev;
+        return archived.map((s) =>
+          s.id === activeSessionId && !s.title ? { ...s, title: label } : s
+        );
+      });
+
+      resetRun();
+      setPaymentStatus(null);
+      setLiveQuery(label);
+      agent.pushEvents([
+        // The picture rides with the turn rather than in separate state, so
+        // it is archived into the session by the same code that archives
+        // everything else — and scrolling back to an old photo search shows
+        // the photo it was, not a label saying there was one.
+        { type: "photo", payload: { image: imageB64, note: note.trim() } },
+        { type: "step", payload: "Sending the photo to eBay's image search." },
+      ]);
+
+      try {
+        const res = await fetch(`${API_BASE}/image-search`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          // Same conversation id the socket sends, so a follow-up typed
+          // after a photo search narrows those results instead of starting
+          // a new search from whatever words it contains.
+          body: JSON.stringify({
+            image_b64: imageB64,
+            note,
+            session_id: activeSessionId,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          agent.pushEvents([
+            {
+              type: "error",
+              payload:
+                typeof data.detail === "string"
+                  ? data.detail
+                  : "The photo search could not run.",
+            },
+          ]);
+          return;
+        }
+        agent.pushEvents([
+          ...(data.steps ?? []).map((s) => ({ type: "step", payload: s })),
+          ...(data.candidates?.length
+            ? [
+                { type: "candidates", payload: data.candidates },
+                // The carousel reads this event, not `candidates`.
+                // recommended_id is null on purpose: the listings are
+                // ordered by quality, but nothing here picked one, and
+                // marking a winner would put an "agent's pick" badge on a
+                // choice the agent never made.
+                {
+                  type: "await_selection",
+                  payload: {
+                    candidates: data.candidates,
+                    recommended_id: null,
+                    reason: null,
+                  },
+                },
+              ]
+            : []),
+        ]);
+      } catch {
+        agent.pushEvents([{ type: "error", payload: "Couldn't reach the backend." }]);
+      }
+    },
+    [activeSessionId, agent, resetRun, setPaymentStatus]
+  );
+
   const value = {
     ...agent,
+    startPhotoSearch,
     transcript,
     sessionList,
     activeSessionId,

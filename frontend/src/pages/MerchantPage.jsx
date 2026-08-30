@@ -25,25 +25,35 @@ function StatTile({ label, value, sub, tone }) {
   return (
     <Box
       sx={{
+        p: 2,
+        borderRadius: 2.5,
         bgcolor: "background.paper",
         border: "1px solid",
         borderColor: "divider",
-        borderRadius: 2.5,
-        p: 2.25,
-        minWidth: 0,
+        // A tinted rule where the number carries a verdict, nothing where it
+        // is just a count — so the eye lands on the one that matters.
+        borderTop: "2px solid",
+        borderTopColor: tone ?? "divider",
       }}
     >
       <Typography variant="caption" sx={{ color: "text.secondary", display: "block", mb: 0.75 }}>
         {label}
       </Typography>
-      <Typography sx={{ fontSize: 24, fontWeight: 600, color: tone ?? "text.primary", lineHeight: 1.15 }}>
+      <Typography
+        sx={{
+          fontSize: 26,
+          fontWeight: 700,
+          lineHeight: 1.1,
+          letterSpacing: "-0.015em",
+          fontVariantNumeric: "tabular-nums",
+          color: tone ?? "text.primary",
+        }}
+      >
         {value}
       </Typography>
-      {sub && (
-        <Typography variant="caption" sx={{ color: "text.secondary", display: "block", mt: 0.5 }}>
-          {sub}
-        </Typography>
-      )}
+      <Typography variant="caption" sx={{ color: "text.disabled", display: "block", mt: 0.5 }}>
+        {sub}
+      </Typography>
     </Box>
   );
 }
@@ -173,9 +183,20 @@ export default function MerchantPage() {
                   bgcolor: tone.bg,
                   border: "1px solid",
                   borderColor: tone.border,
+                  borderLeft: "3px solid",
+                  borderLeftColor: tone.border,
                 }}
               >
-                <Typography variant="body2" sx={{ color: "text.secondary", lineHeight: 1.65 }}>
+                {note.headline && (
+                  <Typography
+                    variant="body2"
+                    sx={{ fontWeight: 600, fontSize: 13.5, mb: 0.5, color: "text.primary" }}
+                  >
+                    {note.headline}
+                  </Typography>
+                )}
+                <Typography variant="body2" sx={{ color: "text.secondary", lineHeight: 1.65,
+                                                  fontSize: 13 }}>
                   {note.text}
                 </Typography>
               </Box>

@@ -150,7 +150,7 @@ export default function LandingPage() {
           variant="body1"
           sx={{
             mb: 3,
-            maxWidth: 560,
+            maxWidth: 620,
             lineHeight: 1.6,
             color: "rgba(255,255,255,0.9)",
             textShadow: "0 1px 14px rgba(0,0,0,0.9)",
@@ -164,7 +164,7 @@ export default function LandingPage() {
         <Stack
           direction={{ xs: "column", sm: "row" }}
           spacing={2}
-          sx={{ justifyContent: "center", alignItems: "stretch", width: "100%", maxWidth: 720 }}
+          sx={{ justifyContent: "center", alignItems: "stretch", width: "100%", maxWidth: 560 }}
         >
           {Object.values(ROLES).map((option) => (
             <Box
@@ -177,8 +177,8 @@ export default function LandingPage() {
                 minWidth: 0,
                 textAlign: "left",
                 cursor: "pointer",
-                p: 2,
-                borderRadius: 2.5,
+                p: 1.5,
+                borderRadius: 2,
                 border: "1px solid rgba(255,255,255,0.22)",
                 bgcolor: "rgba(0,0,0,0.45)",
                 backdropFilter: "blur(8px)",
@@ -191,18 +191,19 @@ export default function LandingPage() {
                 },
               }}
             >
-              <Stack direction="row" spacing={1} sx={{ alignItems: "center", mb: 0.75 }}>
+              <Stack direction="row" spacing={1} sx={{ alignItems: "center", mb: 0.5 }}>
                 <Box sx={{ display: "flex", color: "rgba(255,255,255,0.85)" }}>
                   {ROLE_ICONS[option.id]}
                 </Box>
-                <Typography sx={{ fontWeight: 700, fontSize: 15, color: "#fff" }}>
+                <Typography sx={{ fontWeight: 700, fontSize: 13.5, color: "#fff" }}>
                   {option.tagline}
                 </Typography>
                 <ArrowForwardIcon sx={{ fontSize: 15, ml: "auto", opacity: 0.75 }} />
               </Stack>
               <Typography
                 variant="caption"
-                sx={{ color: "rgba(255,255,255,0.82)", lineHeight: 1.6, display: "block" }}
+                sx={{ color: "rgba(255,255,255,0.78)", lineHeight: 1.5,
+                      fontSize: 11.5, display: "block" }}
               >
                 {option.blurb}
               </Typography>

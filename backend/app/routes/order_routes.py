@@ -191,7 +191,12 @@ def _shape(order: dict, with_tracking: bool) -> dict:
 
     if with_tracking:
         decisions = decisions_for_order(order.get("razorpay_order_id"))
-        refunds = refunds_for_order(order.get("id"))
+        # Keyed by the Razorpay order id, like decisions above. These two
+        # lookups used different ids for the same order, so the first real
+        # refund was written under one and read under the other — the money
+        # moved, the record existed, and the tracking page showed no
+        # refunded stage at all.
+        refunds = refunds_for_order(order.get("razorpay_order_id"))
         payload["stages"] = _stages(order, decisions, refunds)
         payload["decisions"] = [
             {

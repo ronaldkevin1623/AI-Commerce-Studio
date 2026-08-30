@@ -11,6 +11,7 @@ import { db } from "../services/firebase";
 export function useFirestoreAudit(maxEntries = 50) {
   const [decisions, setDecisions] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
   useEffect(() => {
     const q = query(
@@ -19,14 +20,25 @@ export function useFirestoreAudit(maxEntries = 50) {
       limit(maxEntries)
     );
 
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const rows = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
-      setDecisions(rows);
-      setLoading(false);
-    });
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        const rows = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+        setDecisions(rows);
+        setError(null);
+        setLoading(false);
+      },
+      // Without this the subscription fails silently and the page waits on a
+      // connection that is never coming. An audit trail that cannot reach its
+      // log has to say so rather than imply it is still loading.
+      (err) => {
+        setError(err?.message || String(err));
+        setLoading(false);
+      }
+    );
 
     return () => unsubscribe();
   }, [maxEntries]);
 
-  return { decisions, loading };
+  return { decisions, loading, error };
 }

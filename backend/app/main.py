@@ -15,6 +15,10 @@ from app.routes import (
     ucp_routes,
     merchant_store_routes,
     redteam_routes,
+    security_routes,
+    preflight_routes,
+    image_routes,
+    product_check_routes,
 )
 
 app = FastAPI(title="AI Commerce Studio API")
@@ -40,6 +44,10 @@ app.include_router(cart_routes.router)
 app.include_router(ucp_routes.router)
 app.include_router(merchant_store_routes.router)
 app.include_router(redteam_routes.router)
+app.include_router(security_routes.router)
+app.include_router(preflight_routes.router)
+app.include_router(image_routes.router)
+app.include_router(product_check_routes.router)
 
 
 @app.get("/health")

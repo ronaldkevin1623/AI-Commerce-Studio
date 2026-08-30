@@ -15,8 +15,10 @@ import MerchantPage from "./pages/MerchantPage";
 import MerchantProductsPage from "./pages/MerchantProductsPage";
 import MerchantProductFormPage from "./pages/MerchantProductFormPage";
 import MerchantGrowthPage from "./pages/MerchantGrowthPage";
+import MerchantHivePage from "./pages/MerchantHivePage";
 import MerchantOrdersPage from "./pages/MerchantOrdersPage";
 import RedTeamPage from "./pages/RedTeamPage";
+import SecurityPage from "./pages/SecurityPage";
 import ApprovalsPage from "./pages/ApprovalsPage";
 import OrdersPage from "./pages/OrdersPage";
 import OrderTrackingPage from "./pages/OrderTrackingPage";
@@ -43,12 +45,14 @@ export default function App() {
             <Route path="/merchant/products" element={<MerchantProductsPage />} />
             <Route path="/merchant/products/new" element={<MerchantProductFormPage />} />
             <Route path="/merchant/growth" element={<MerchantGrowthPage />} />
+            <Route path="/merchant/hive" element={<MerchantHivePage />} />
             <Route path="/merchant/orders" element={<MerchantOrdersPage />} />
             <Route path="/orders" element={<OrdersPage />} />
             <Route path="/orders/:orderId" element={<OrderTrackingPage />} />
             <Route path="/audit" element={<AuditTrailPage />} />
             <Route path="/recovery" element={<FailureRecoveryPage />} />
             <Route path="/redteam" element={<RedTeamPage />} />
+            <Route path="/security" element={<SecurityPage />} />
           </Routes>
           </RequireRole>
         </AppShell>

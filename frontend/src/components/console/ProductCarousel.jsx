@@ -182,16 +182,49 @@ export default function ProductCarousel({ products = [], recommendedId, onOpen }
                     can only be found and linked to. Saying so on the card
                     keeps that difference visible before anything is added. */}
                 {product.source === "merchant" ? (
-                  <Stack direction="row" spacing={0.4} sx={{ alignItems: "center", mt: 0.5 }}>
-                    <StorefrontOutlinedIcon sx={{ fontSize: 11, color: "success.main" }} />
-                    <Typography variant="caption" sx={{ color: "success.main", fontWeight: 600, fontSize: 10.5 }}>
-                      {product.merchant_name ?? "UCP merchant"} · buyable
+                  <Stack
+                    direction="row"
+                    spacing={0.5}
+                    sx={{
+                      alignItems: "center",
+                      mt: 0.75,
+                      px: 0.9,
+                      py: 0.4,
+                      borderRadius: 1,
+                      alignSelf: "flex-start",
+                      bgcolor: "rgba(34,197,94,0.14)",
+                      border: "1px solid",
+                      borderColor: "rgba(34,197,94,0.45)",
+                    }}
+                  >
+                    <StorefrontOutlinedIcon sx={{ fontSize: 13, color: "success.main" }} />
+                    <Typography
+                      sx={{ color: "success.main", fontWeight: 700, fontSize: 11,
+                            letterSpacing: "0.02em", lineHeight: 1.2 }}
+                    >
+                      {product.merchant_name ?? "UCP merchant"} · can be delivered
                     </Typography>
                   </Stack>
                 ) : (
-                  <Typography variant="caption" sx={{ color: "text.disabled", display: "block", mt: 0.5, fontSize: 10.5 }}>
-                    eBay listing · search only
-                  </Typography>
+                  <Box
+                    sx={{
+                      mt: 0.75,
+                      px: 0.9,
+                      py: 0.4,
+                      borderRadius: 1,
+                      alignSelf: "flex-start",
+                      bgcolor: "rgba(245,158,11,0.10)",
+                      border: "1px solid",
+                      borderColor: "rgba(245,158,11,0.35)",
+                    }}
+                  >
+                    <Typography
+                      sx={{ color: "warning.main", fontWeight: 600, fontSize: 11,
+                            letterSpacing: "0.02em", lineHeight: 1.2 }}
+                    >
+                      eBay · payable, but no seller to ship it
+                    </Typography>
+                  </Box>
                 )}
 
                 <Stack direction="row" sx={{ alignItems: "baseline", justifyContent: "space-between", mt: 0.75, gap: 1 }}>
@@ -206,13 +239,21 @@ export default function ProductCarousel({ products = [], recommendedId, onOpen }
                     )}
                   </Stack>
 
-                  {product.seller_feedback != null && (
+                  {/* eBay reports 0.0% for a seller nobody has rated. Showing
+                      that as a rating invents the worst possible reputation
+                      out of no evidence, so an unrated seller says so. */}
+                  {product.seller_feedback != null &&
+                  (product.seller_feedback_count || 0) > 0 ? (
                     <Stack direction="row" spacing={0.3} sx={{ alignItems: "center", flexShrink: 0 }}>
                       <StarIcon sx={{ fontSize: 12, color: "#F59E0B" }} />
                       <Typography variant="caption" sx={{ color: "text.secondary", fontVariantNumeric: "tabular-nums" }}>
                         {product.seller_feedback}%
                       </Typography>
                     </Stack>
+                  ) : (
+                    <Typography variant="caption" sx={{ color: "text.disabled", flexShrink: 0 }}>
+                      no seller ratings
+                    </Typography>
                   )}
                 </Stack>
               </Box>

@@ -26,9 +26,13 @@ function describeEvent(event) {
     case "mandate": {
       const m = event.payload;
       if (m.stage === "intent") {
-        return `Intent mandate signed — under ₹${(m.constraints.max_amount_paise / 100).toLocaleString(
-          "en-IN"
-        )} for "${m.constraints.category}" · ${m.hash.slice(0, 12)}…`;
+        // Only quote a ceiling the person actually set. When they named no
+        // budget the signed figure is a search bound, and printing it as a
+        // signed limit reads as a spending cap they never asked for.
+        const bound = m.constraints.budget_stated
+          ? `under ₹${(m.constraints.max_amount_paise / 100).toLocaleString("en-IN")}`
+          : "no spending limit set";
+        return `Intent mandate signed — ${bound} for "${m.constraints.category}" · ${m.hash.slice(0, 12)}…`;
       }
       if (m.stage === "cart") {
         return `Cart mandate signed — bound to intent ${m.intent_hash.slice(0, 12)}… · ${m.hash.slice(

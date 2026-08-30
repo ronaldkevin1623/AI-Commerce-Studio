@@ -104,8 +104,22 @@ export function useAgentSocket() {
     }
   }, []);
 
+  /**
+   * Append events that did not arrive over the socket.
+   *
+   * The photo search is a plain request/response — there is no run to
+   * stream — but its result is the same thing a typed search produces:
+   * steps, then candidates. Pushing them into this list means the existing
+   * turn renderer draws them, rather than a second results view being built
+   * that would drift from the first.
+   */
+  const pushEvents = useCallback((incoming) => {
+    setEvents((prev) => [...prev, ...incoming]);
+  }, []);
+
   return {
     events,
+    pushEvents,
     isRunning,
     pendingApproval,
     pendingSelection,

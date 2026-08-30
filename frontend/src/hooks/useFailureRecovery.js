@@ -13,6 +13,7 @@ export function useFailureRecovery() {
   const [failure, setFailure] = useState(null);
   const [recovery, setRecovery] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
   useEffect(() => {
     const q = query(collection(db, "decisions"), orderBy("timestamp", "desc"), limit(50));
@@ -35,11 +36,18 @@ export function useFailureRecovery() {
         setRecovery(null);
       }
 
+      setError(null);
+      setLoading(false);
+    },
+    // A subscription that cannot connect must resolve into a stated problem
+    // rather than an indefinite wait.
+    (err) => {
+      setError(err?.message || String(err));
       setLoading(false);
     });
 
     return () => unsubscribe();
   }, []);
 
-  return { failure, recovery, loading };
+  return { failure, recovery, loading, error };
 }

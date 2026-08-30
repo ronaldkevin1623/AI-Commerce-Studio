@@ -1,8 +1,14 @@
-import { useRef, useState } from "react";
-import { Box, Button, Drawer, IconButton, Stack, Typography } from "@mui/material";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  Box, Button, CircularProgress, Collapse, Drawer, IconButton, Stack, Typography,
+} from "@mui/material";
 import CloseIcon from "@mui/icons-material/Close";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutlineOutlined";
 import ShieldOutlinedIcon from "@mui/icons-material/ShieldOutlined";
+import CheckCircleOutlineIcon from "@mui/icons-material/CheckCircleOutlineOutlined";
+import ErrorOutlineIcon from "@mui/icons-material/ErrorOutlineOutlined";
+import ReportProblemOutlinedIcon from "@mui/icons-material/ReportProblemOutlined";
+import HelpOutlineIcon from "@mui/icons-material/HelpOutlineOutlined";
 
 import { useCart } from "../../context/CartContext";
 import { API_BASE } from "../../config";
@@ -33,6 +39,57 @@ export default function CartPanel({ onOrderCreated }) {
   // checkout is a genuinely new intent rather than a replay of the last one.
   const attemptKey = useRef(null);
 
+  const [overage, setOverage] = useState(null);
+  const [confirmOverride, setConfirmOverride] = useState(false);
+
+  // The safety check, and the exact basket it was run against.
+  //
+  // A green light belongs to one basket, not to the cart as a concept. If
+  // an item is added, removed or requantified afterwards, the result on
+  // screen would be describing something the person is no longer buying —
+  // so the signature below invalidates it and the check has to be run
+  // again. This is the whole integrity of the feature: without it, "checked"
+  // would slowly come to mean "checked something, once".
+  const [preflight, setPreflight] = useState(null);
+  const [flight, setFlight] = useState("idle"); // idle | running | error
+  const [flightError, setFlightError] = useState(null);
+
+  const basketSignature = useMemo(
+    () => items.map((i) => `${i.id}x${i.quantity}@${i.price_paise}`).join("|"),
+    [items],
+  );
+
+  useEffect(() => {
+    setPreflight(null);
+    setFlight("idle");
+    setFlightError(null);
+  }, [basketSignature]);
+
+  const runPreflight = async () => {
+    setFlight("running");
+    setFlightError(null);
+    try {
+      const res = await fetch(`${API_BASE}/preflight`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setFlight("error");
+        setFlightError(
+          typeof data.detail === "string" ? data.detail : "The check could not run.",
+        );
+        return;
+      }
+      setPreflight(data);
+      setFlight("idle");
+    } catch {
+      setFlight("error");
+      setFlightError("Couldn't reach the backend.");
+    }
+  };
+
   const checkout = async () => {
     setStatus("checking");
     setMessage(null);
@@ -49,12 +106,27 @@ export default function CartPanel({ onOrderCreated }) {
           "UCP-Agent": 'profile="commerce-studio-console"',
           "request-id": crypto.randomUUID?.() ?? String(Date.now()),
         },
-        body: JSON.stringify({ items }),
+        body: JSON.stringify({
+          items,
+          // Only ever true on the second click, after the amount
+          // and the excess have been shown.
+          confirm_over_ceiling: confirmOverride,
+        }),
       });
       const data = await res.json().catch(() => ({}));
 
       if (res.status === 409) {
         const detail = data.detail ?? {};
+
+        // The person's own ceiling, which they can lift by saying so. This
+        // is not an escalation to somebody else — it is a question for them.
+        if (detail.status === "over_ceiling" && detail.confirmable) {
+          setStatus("over_ceiling");
+          setOverage(detail);
+          setMessage(null);
+          return;
+        }
+
         setStatus("escalated");
         setMessage(detail.reason ?? "A human needs to approve this.");
         return;
@@ -66,6 +138,8 @@ export default function CartPanel({ onOrderCreated }) {
       }
 
       setStatus("idle");
+      setOverage(null);
+      setConfirmOverride(false);
       setOpen(false);
       clear();
       attemptKey.current = null; // this intent is done; the next one is new
@@ -193,15 +267,101 @@ export default function CartPanel({ onOrderCreated }) {
             </Typography>
           )}
 
-          <Button
-            fullWidth
-            variant="contained"
-            disabled={status === "checking"}
-            onClick={checkout}
-            sx={{ py: 1.1 }}
-          >
-            {status === "checking" ? "Running the gate…" : `Checkout · ${inr(total)}`}
-          </Button>
+          {overage ? (
+            <Box
+              sx={{
+                p: 1.5, mb: 1.25, borderRadius: 1.5,
+                border: "1px solid", borderColor: "warning.dark",
+                bgcolor: "rgba(245,158,11,0.08)",
+              }}
+            >
+              <Typography variant="caption" sx={{ fontWeight: 700, display: "block", mb: 0.5 }}>
+                {inr(overage.excess_paise)} over your own ceiling
+              </Typography>
+              <Typography variant="caption" sx={{ color: "text.secondary", lineHeight: 1.6, display: "block" }}>
+                {inr(overage.total_paise)} against a {inr(overage.ceiling_paise)} limit.
+                That bound exists to stop the agent spending freely — it is not
+                a limit on you. Confirm and it goes through, recorded in the
+                audit trail as your decision.
+              </Typography>
+            </Box>
+          ) : null}
+
+          {/* The safety check, before the money moves. */}
+          {preflight && <PreflightReport report={preflight} />}
+
+          {flightError && (
+            <Typography variant="caption" sx={{ color: "error.main", display: "block", mb: 1.25 }}>
+              {flightError}
+            </Typography>
+          )}
+
+          {!preflight ? (
+            <Button
+              fullWidth
+              variant="contained"
+              disabled={flight === "running" || !items.length}
+              onClick={runPreflight}
+              startIcon={
+                flight === "running"
+                  ? <CircularProgress size={14} color="inherit" />
+                  : <ShieldOutlinedIcon sx={{ fontSize: 17 }} />
+              }
+              sx={{ py: 1.1 }}
+            >
+              {flight === "running" ? "Checking…" : "Check before buying"}
+            </Button>
+          ) : (
+            <Button
+              fullWidth
+              variant="contained"
+              // Blocked means the seller's own record disagrees with this
+              // basket. There is no honest amount to charge, so this is the
+              // one state the person cannot click past — re-check instead.
+              color={preflight.verdict === "blocked"
+                ? "inherit"
+                : preflight.verdict === "attention" || overage ? "warning" : "success"}
+              disabled={status === "checking" || preflight.verdict === "blocked"}
+              onClick={() => {
+                if (overage) setConfirmOverride(true);
+                checkout();
+              }}
+              sx={{ py: 1.1 }}
+            >
+              {status === "checking"
+                ? "Running the gate…"
+                : preflight.verdict === "blocked"
+                  ? "Cannot buy — see above"
+                  : overage
+                    ? `Buy anyway · ${inr(total)}`
+                    : preflight.verdict === "attention"
+                      ? `Buy anyway · ${inr(total)}`
+                      : `Buy · ${inr(total)}`}
+            </Button>
+          )}
+
+          {preflight && (
+            <Button
+              fullWidth
+              size="small"
+              onClick={runPreflight}
+              disabled={flight === "running"}
+              sx={{ mt: 0.75, color: "text.secondary" }}
+            >
+              {flight === "running" ? "Checking…" : "Run the check again"}
+            </Button>
+          )}
+
+          {overage && (
+            <Button
+              fullWidth
+              size="small"
+              onClick={() => { setOverage(null); setConfirmOverride(false); }}
+              sx={{ mt: 0.75, color: "text.secondary" }}
+            >
+              Keep the limit — cancel
+            </Button>
+          )}
 
           <Stack direction="row" spacing={0.75} sx={{ alignItems: "center", justifyContent: "center", mt: 1.25 }}>
             <ShieldOutlinedIcon sx={{ fontSize: 12, color: "text.secondary" }} />
@@ -212,6 +372,98 @@ export default function CartPanel({ onOrderCreated }) {
         </Box>
       )}
     </Drawer>
+  );
+}
+
+const STATUS = {
+  pass: { icon: CheckCircleOutlineIcon, color: "success.main" },
+  warn: { icon: ReportProblemOutlinedIcon, color: "warning.main" },
+  fail: { icon: ErrorOutlineIcon, color: "error.main" },
+  unknown: { icon: HelpOutlineIcon, color: "text.disabled" },
+};
+
+const VERDICT = {
+  clear: {
+    line: "Safe to buy",
+    plain: "Every check passed against this exact basket.",
+    color: "success.main", tint: "rgba(34,197,94,0.08)", edge: "rgba(34,197,94,0.35)",
+  },
+  attention: {
+    line: "Worth a look first",
+    plain: "Nothing here stops the purchase — read it and decide.",
+    color: "warning.main", tint: "rgba(245,158,11,0.08)", edge: "rgba(245,158,11,0.4)",
+  },
+  blocked: {
+    line: "Not safe to buy",
+    plain: "Something below has to be right before money moves.",
+    color: "error.main", tint: "rgba(239,68,68,0.08)", edge: "rgba(239,68,68,0.4)",
+  },
+};
+
+/**
+ * The result of the pre-purchase check, in the cart drawer.
+ *
+ * The verdict comes first and in words — a person should not have to count
+ * green ticks to learn whether they can buy. Every check is then listed
+ * whether it passed or not: showing only the problems would leave someone
+ * unable to tell a clean run from a run that never happened.
+ *
+ * Detail is folded for checks that passed and open for those that did not,
+ * because the ones that did not are the reason the panel is on screen.
+ */
+function PreflightReport({ report }) {
+  const [openRow, setOpenRow] = useState(null);
+  const tone = VERDICT[report.verdict] ?? VERDICT.attention;
+
+  return (
+    <Box
+      sx={{
+        mb: 1.5, borderRadius: 1.5, overflow: "hidden",
+        border: "1px solid", borderColor: tone.edge,
+      }}
+    >
+      <Box sx={{ px: 1.5, py: 1.25, bgcolor: tone.tint }}>
+        <Typography variant="caption" sx={{ fontWeight: 700, color: tone.color, display: "block" }}>
+          {tone.line}
+        </Typography>
+        <Typography variant="caption" sx={{ color: "text.secondary", fontSize: 11, lineHeight: 1.5 }}>
+          {tone.plain}
+        </Typography>
+      </Box>
+
+      <Box sx={{ px: 1.5, py: 0.5 }}>
+        {report.checks.map((check) => {
+          const meta = STATUS[check.status] ?? STATUS.unknown;
+          const Icon = meta.icon;
+          const failed = check.status !== "pass";
+          const expanded = openRow === null ? failed : openRow === check.id;
+          return (
+            <Box key={check.id} sx={{ py: 0.6 }}>
+              <Stack
+                direction="row"
+                spacing={1}
+                onClick={() => setOpenRow(expanded && openRow === check.id ? "" : check.id)}
+                sx={{ alignItems: "flex-start", cursor: "pointer" }}
+              >
+                <Icon sx={{ fontSize: 15, color: meta.color, mt: "1px", flexShrink: 0 }} />
+                <Typography variant="caption" sx={{ fontSize: 11.5, lineHeight: 1.45, flex: 1 }}>
+                  {check.label}
+                </Typography>
+              </Stack>
+              <Collapse in={expanded} unmountOnExit>
+                <Typography
+                  variant="caption"
+                  sx={{ display: "block", pl: 3, pr: 0.5, pt: 0.25, fontSize: 10.5,
+                        lineHeight: 1.55, color: "text.secondary" }}
+                >
+                  {check.detail}
+                </Typography>
+              </Collapse>
+            </Box>
+          );
+        })}
+      </Box>
+    </Box>
   );
 }
 
