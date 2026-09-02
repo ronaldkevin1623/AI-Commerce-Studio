@@ -1,10 +1,11 @@
 import { useRef, useState } from "react";
-import { Box, Chip, Stack, Typography } from "@mui/material";
+import { Box, Chip, Stack, Tooltip, Typography } from "@mui/material";
 import ChevronLeftIcon from "@mui/icons-material/ChevronLeft";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import StarIcon from "@mui/icons-material/Star";
 import WarningAmberOutlinedIcon from "@mui/icons-material/WarningAmberOutlined";
 import StorefrontOutlinedIcon from "@mui/icons-material/StorefrontOutlined";
+import CampaignOutlinedIcon from "@mui/icons-material/CampaignOutlined";
 
 const inr = (paise) => `₹${((paise ?? 0) / 100).toLocaleString("en-IN", { maximumFractionDigits: 0 })}`;
 
@@ -175,6 +176,43 @@ export default function ProductCarousel({ products = [], recommendedId, onOpen }
                   >
                     {product.variant_note}
                   </Typography>
+                )}
+
+                {/* Paid for its place in the CONSIDERATION set, and nothing
+                    else. Labelled here rather than in a footnote because a
+                    shopper is entitled to know a merchant paid to be looked
+                    at — and entitled to know what that did not buy, which
+                    is why the tooltip says it outright. */}
+                {product.sponsored && (
+                  <Tooltip
+                    arrow
+                    title={product.sponsored_note
+                      ?? "Promoted into consideration by the merchant. Its position here was earned on the same signals as everything else."}
+                  >
+                    <Stack
+                      direction="row"
+                      spacing={0.5}
+                      sx={{
+                        alignItems: "center",
+                        mt: 0.75,
+                        px: 0.9,
+                        py: 0.4,
+                        borderRadius: 1,
+                        alignSelf: "flex-start",
+                        bgcolor: "rgba(148,163,184,0.14)",
+                        border: "1px dashed",
+                        borderColor: "rgba(148,163,184,0.5)",
+                      }}
+                    >
+                      <CampaignOutlinedIcon sx={{ fontSize: 13, color: "text.secondary" }} />
+                      <Typography
+                        sx={{ color: "text.secondary", fontWeight: 700, fontSize: 11,
+                              letterSpacing: "0.02em", lineHeight: 1.2 }}
+                      >
+                        Sponsored · ranked on merit
+                      </Typography>
+                    </Stack>
+                  </Tooltip>
                 )}
 
                 {/* Where it came from decides what can happen next: the agent

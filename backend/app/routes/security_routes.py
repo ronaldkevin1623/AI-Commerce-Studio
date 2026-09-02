@@ -21,7 +21,7 @@ from collections import Counter
 
 from fastapi import APIRouter
 
-from app.firebase_client import db
+from app.firebase_client import db, log_decision
 from app.config import RAZORPAY_KEY_ID
 
 router = APIRouter()
@@ -132,4 +132,123 @@ def data_audit():
             "It is not a stored result: if a card number were ever written "
             "here, this page would report it on the next load."
         ),
+    }
+
+
+# ── Forgetting a search ──────────────────────────────────────────────────
+#
+# An agent that keeps everything it has ever been asked and cannot be told
+# to drop any of it is its own kind of problem, and this page is the one
+# claiming to answer "what do you know about me". Auditing without a way to
+# act on the answer is only half the promise.
+#
+# A search leaves rows in TWO places — `runs`, which is the conversation,
+# and `market_scans`, which is what the marketplace returned. Deleting one
+# and not the other would report a search as forgotten while the query text
+# was still sitting in the database, which is worse than not offering the
+# control at all.
+
+FORGETTABLE = ("runs", "market_scans")
+
+
+def _search_rows() -> dict:
+    """Every stored search, grouped by the words that were typed."""
+    grouped: dict = {}
+    for collection in FORGETTABLE:
+        try:
+            docs = db.collection(collection).limit(300).get()
+        except Exception as exc:
+            print(f"[security] could not read {collection}: {exc}", flush=True)
+            continue
+        for doc in docs:
+            row = doc.to_dict() or {}
+            query = (row.get("query") or "").strip()
+            if not query:
+                continue
+            entry = grouped.setdefault(query, {
+                "query": query, "runs": 0, "scans": 0, "last_seen": None,
+            })
+            entry["runs" if collection == "runs" else "scans"] += 1
+            when = row.get("created_at") or row.get("ran_at")
+            stamp = getattr(when, "isoformat", lambda: None)()
+            if stamp and (not entry["last_seen"] or stamp > entry["last_seen"]):
+                entry["last_seen"] = stamp
+    return grouped
+
+
+@router.get("/security/searches")
+def stored_searches():
+    """
+    What this agent remembers you looking for, and where it is kept.
+
+    Ordered newest first, because the recent ones are both the most likely
+    to be regretted and the ones actually steering recommendations.
+    """
+    grouped = _search_rows()
+    rows = sorted(grouped.values(),
+                  key=lambda r: r["last_seen"] or "", reverse=True)
+    return {
+        "searches": rows,
+        "count": len(rows),
+        "rows_held": sum(r["runs"] + r["scans"] for r in rows),
+        "note": ("Each search is stored twice: the conversation in `runs`, "
+                 "and what the marketplace returned in `market_scans`. "
+                 "Forgetting one removes both. Recommendations are built "
+                 "from what is left, so a forgotten search stops influencing "
+                 "them on the next load."),
+    }
+
+
+@router.delete("/security/searches")
+def forget_search(query: str = "", all: bool = False):
+    """
+    Delete one search, or all of them, from both collections.
+
+    The audit trail records that a deletion happened and how many rows went
+    — but NOT the query text. Writing the words into `decisions` on the way
+    out would leave the very thing the person just asked to be rid of
+    sitting in another collection, and call it accountability.
+    """
+    if not query and not all:
+        return {"ok": False, "error": "Name a search to forget, or pass all=true."}
+
+    removed = {"runs": 0, "market_scans": 0}
+    target = query.strip().lower()
+
+    for collection in FORGETTABLE:
+        try:
+            for doc in db.collection(collection).limit(500).get():
+                row = doc.to_dict() or {}
+                stored = (row.get("query") or "").strip().lower()
+                if not stored:
+                    continue
+                if all or stored == target:
+                    doc.reference.delete()
+                    removed[collection] += 1
+        except Exception as exc:
+            print(f"[security] could not clear {collection}: {exc}", flush=True)
+
+    total = removed["runs"] + removed["market_scans"]
+    try:
+        log_decision(
+            action_type="search_history_forgotten",
+            amount_paise=0,
+            decision="allowed",
+            reason=(f"A person asked this agent to forget "
+                    f"{'all stored searches' if all else 'a stored search'}. "
+                    f"{removed['runs']} conversation rows and "
+                    f"{removed['market_scans']} marketplace scans deleted. "
+                    f"The words themselves are deliberately not recorded "
+                    f"here — logging them would undo the deletion."),
+        )
+    except Exception as exc:
+        print(f"[security] deletion not logged: {exc}", flush=True)
+
+    return {
+        "ok": True,
+        "removed": removed,
+        "total": total,
+        "detail": (f"Forgotten. {total} row{'s' if total != 1 else ''} deleted "
+                   f"across {len(FORGETTABLE)} collections. This will stop "
+                   f"influencing recommendations on the next load."),
     }

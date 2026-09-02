@@ -551,6 +551,11 @@ def resolve_variants(items: list[dict], query: str = "", requirements=None,
 _REVIEW_CACHE: dict[str, dict] = {}
 
 
+# Bumped whenever the set of fields pulled from the item endpoint changes,
+# so a cache filled by the previous shape is not read as the current one.
+_ENRICH_SCHEMA = 2
+
+
 def enrich_reviews(items: list[dict], limit: int = 8) -> list[dict]:
     """
     Add real star ratings and return terms to the first `limit` listings.
@@ -572,8 +577,13 @@ def enrich_reviews(items: list[dict], limit: int = 8) -> list[dict]:
         if not item_id:
             continue
 
-        if item_id in _REVIEW_CACHE:
-            item.update(_REVIEW_CACHE[item_id])
+        # Keyed by what is being extracted, not just the item. Adding the
+        # availability fields to this function left every already-cached
+        # listing returning the old three keys forever — the new signals
+        # read as missing on exactly the items the cache had helped with.
+        cache_key = (item_id, _ENRICH_SCHEMA)
+        if cache_key in _REVIEW_CACHE:
+            item.update(_REVIEW_CACHE[cache_key])
             continue
 
         try:
@@ -589,13 +599,29 @@ def enrich_reviews(items: list[dict], limit: int = 8) -> list[dict]:
             continue
 
         rating = body.get("primaryProductReviewRating") or {}
+        terms = body.get("returnTerms") or {}
+        # eBay reports availability per delivery option; the ship-to-home
+        # one is the only one that matters to a buyer in India.
+        availability = next(
+            (a for a in (body.get("estimatedAvailabilities") or [])
+             if "SHIP_TO_HOME" in (a.get("deliveryOptions") or [])),
+            (body.get("estimatedAvailabilities") or [{}])[0])
+
         found = {
             "review_stars": _num_or_none(rating.get("averageRating")),
             "review_count": _num_or_none(rating.get("reviewCount")),
-            "returns_accepted": bool(
-                (body.get("returnTerms") or {}).get("returnsAccepted")),
+            "returns_accepted": bool(terms.get("returnsAccepted")),
+            "return_days": _num_or_none(
+                (terms.get("returnPeriod") or {}).get("value")),
+            # Was being fetched and thrown away. These three are the
+            # precision signals the hard filter runs on: whether the thing
+            # can actually be bought, how many people have bought it, and
+            # how many the seller says are left.
+            "availability": availability.get("estimatedAvailabilityStatus"),
+            "sold_quantity": _num_or_none(availability.get("estimatedSoldQuantity")),
+            "stock_estimate": _num_or_none(availability.get("availabilityThreshold")),
         }
-        _REVIEW_CACHE[item_id] = found
+        _REVIEW_CACHE[cache_key] = found
         item.update(found)
 
     return items

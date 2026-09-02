@@ -1,4 +1,4 @@
-import { CLUSTERS, SPECIALISTS, TOOLS } from "./topology";
+import { CLUSTERS, SPECIALISTS, TOOLS, TUNABLE } from "./topology";
 
 /**
  * Default hive layout — five columns, left to right:
@@ -32,23 +32,35 @@ const PAD = 34;
  * bands inside every chat turn would be noise, not information. The /hive
  * page passes no filter and gets the whole thing.
  */
-function visible(clusterIds) {
+function visible(clusterIds, onlyTunable) {
   const clusters = clusterIds ? CLUSTERS.filter((c) => clusterIds.includes(c.id)) : CLUSTERS;
-  const specialists = SPECIALISTS.filter((s) => clusters.some((c) => c.id === s.cluster));
+  let specialists = SPECIALISTS.filter((s) => clusters.some((c) => c.id === s.cluster));
+  // Narrowed to the nodes that have something to turn. The rest are real —
+  // Payment does create the Razorpay order — but they take no parameter, so
+  // on a page being used as a control surface they are captions.
+  if (onlyTunable) {
+    specialists = specialists.filter((s) => TUNABLE.has(s.id));
+  }
+  // A cluster is placed at the midpoint of its own children, so one left
+  // with none produces NaN and the whole band — YOU, the hive, the cluster
+  // — lands in the top-left corner. Post-purchase has no tunable node, so
+  // narrowing emptied it. An empty band has nothing to say anyway.
+  const populated = clusters.filter(
+    (c) => specialists.some((s) => s.cluster === c.id));
   const toolIds = new Set(specialists.flatMap((s) => s.tools ?? []));
   const tools = TOOLS.filter((t) => toolIds.has(t.id));
-  return { clusters, specialists, tools };
+  return { clusters: populated, specialists, tools };
 }
 
-export function layoutHeight(clusterIds) {
-  const { clusters, specialists } = visible(clusterIds);
+export function layoutHeight(clusterIds, onlyTunable) {
+  const { clusters, specialists } = visible(clusterIds, onlyTunable);
   const rows = specialists.length * ROW_STEP + (clusters.length - 1) * CLUSTER_GAP;
   return Math.max(rows + PAD, 200);
 }
 
-export function defaultLayout(clusterIds) {
-  const { clusters, specialists, tools } = visible(clusterIds);
-  const height = layoutHeight(clusterIds);
+export function defaultLayout(clusterIds, onlyTunable) {
+  const { clusters, specialists, tools } = visible(clusterIds, onlyTunable);
+  const height = layoutHeight(clusterIds, onlyTunable);
   const nodes = [];
 
   // Specialists stack in cluster order, with a gap between groups so the
@@ -92,8 +104,8 @@ export function defaultLayout(clusterIds) {
 }
 
 /** Directed edges, derived from the topology rather than hand-listed. */
-export function edges(clusterIds) {
-  const { clusters, specialists } = visible(clusterIds);
+export function edges(clusterIds, onlyTunable) {
+  const { clusters, specialists } = visible(clusterIds, onlyTunable);
   const list = [{ from: "you", to: "hive" }];
   for (const c of clusters) list.push({ from: "hive", to: c.id });
   for (const s of specialists) {

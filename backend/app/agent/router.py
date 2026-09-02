@@ -105,6 +105,58 @@ _ASIDE = re.compile(
     re.IGNORECASE)
 
 
+# Acknowledgements longer than one word.
+#
+# _ASIDE anchors a SINGLE token, which meant "thanks" was an aside and
+# "great, thanks" was a product search — it reached the marketplace and
+# queried eBay for "great thanks". Anything a person says to be polite has
+# to land in the same place regardless of how many words they used.
+#
+# CORE carries the social meaning; FILLER is only allowed to accompany it.
+# The split matters: a message made only of filler is not an aside, and
+# the words a person uses to CHOOSE something — "that", "the", "one",
+# "this" — are deliberately in neither set, so "ok that's the one" stays a
+# selection rather than being swallowed as politeness.
+_CORE_SOCIAL = {
+    "hi", "hey", "heyy", "hello", "yo", "howdy", "sup", "thanks", "thanx",
+    "thankyou", "thank", "thx", "ty", "ta", "cheers", "ok", "okay", "kk",
+    "cool", "nice", "great", "awesome", "amazing", "perfect", "brilliant",
+    "lovely", "super", "excellent", "lol", "haha", "bye", "goodbye",
+    "appreciate", "appreciated", "welcome", "worries", "job",
+}
+_SOCIAL_FILLER = {
+    "you", "u", "so", "very", "much", "really", "a", "lot", "helpful",
+    "help", "useful", "good", "again", "there", "all", "everyone", "folks",
+    "mate", "man", "friend", "buddy", "indeed", "work", "works", "worked",
+    "that's", "thats", "is", "was", "no", "worries", "np", "for", "your",
+    "my", "well", "done", "job", "wonderful", "fine",
+}
+# "nice one", "good one" are idioms. "one" is otherwise a selection word,
+# so it is only filler in a two-word acknowledgement.
+_SHORT_IDIOM_FILLER = {"one", "stuff"}
+
+_WORD = re.compile(r"[a-z']+")
+
+
+def _all_social(text: str) -> bool:
+    words = _WORD.findall((text or "").lower())
+    if not words or len(words) > 6:
+        return False
+    if not any(w in _CORE_SOCIAL for w in words):
+        return False
+    # "job lot" is a real eBay listing term — a seller offloading a bundle.
+    # "job" is in CORE so that "good job" is recognised as praise, and that
+    # would otherwise turn a genuine search for "job lot of keyboards" into
+    # small talk. The idiom is excluded by name rather than by dropping the
+    # word, because both readings are real.
+    if "job" in words and "lot" in words:
+        return False
+    allowed = _CORE_SOCIAL | _SOCIAL_FILLER
+    if len(words) <= 2:
+        allowed = allowed | _SHORT_IDIOM_FILLER
+    return all(w in allowed for w in words)
+
+
 def classify(text: str, has_results: bool = False,
              previous_query: str = "") -> dict:
     """
@@ -117,7 +169,7 @@ def classify(text: str, has_results: bool = False,
     if not stripped:
         return {"route": "aside", "reason": "empty message"}
 
-    if _ASIDE.match(stripped):
+    if _ASIDE.match(stripped) or _all_social(stripped):
         return {"route": "aside", "reason": "a greeting or acknowledgement"}
 
     asking = bool(_ASKING.match(stripped))

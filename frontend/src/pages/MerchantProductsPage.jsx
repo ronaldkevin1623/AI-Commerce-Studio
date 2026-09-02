@@ -6,6 +6,7 @@ import LocalOfferOutlinedIcon from "@mui/icons-material/LocalOfferOutlined";
 import ImageOutlinedIcon from "@mui/icons-material/ImageOutlined";
 
 import { API_BASE } from "../config";
+import PromotionsPanel from "../components/merchant/PromotionsPanel";
 
 const inr = (paise) =>
   `₹${((paise ?? 0) / 100).toLocaleString("en-IN", { maximumFractionDigits: 2 })}`;
@@ -237,6 +238,8 @@ export default function MerchantProductsPage() {
           neither discover nor check one out until it is published.
         </Typography>
       )}
+
+      {status === "ready" && <PromotionsPanel products={products} />}
     </Box>
   );
 }

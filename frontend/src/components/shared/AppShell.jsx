@@ -8,7 +8,7 @@ import { useRole } from "../../context/RoleContext";
 import RoleSwitcher from "./RoleSwitcher";
 import AppSidebar from "./AppSidebar";
 import Logo from "./Logo";
-import Starfield from "./Starfield";
+import Pattern from "./Pattern";
 
 // The only element on the page that scrolls. The bar and the sidebar are
 // pinned by the shell, so a long page no longer carries the navigation off
@@ -62,7 +62,7 @@ export default function AppShell({ children }) {
       {/* Behind everything, fixed, inert. The shell below is transparent so
           this shows through the empty space; the bar, the sidebar and every
           card keep their own opaque surfaces and are unchanged. */}
-      <Starfield />
+      <Pattern />
 
       <Box
         sx={{
@@ -70,7 +70,7 @@ export default function AppShell({ children }) {
           display: "flex",
           flexDirection: "column",
           overflow: "hidden",
-          // Was background.default. Transparent so the stars are visible,
+          // Was background.default. Transparent so the grid is visible,
           // with an explicit stacking context above the fixed layer.
           bgcolor: "transparent",
           position: "relative",

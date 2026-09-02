@@ -29,6 +29,15 @@ from app.agent import router as turn_router
 from app.agent import answer as answerer
 from app.agent import preferences
 from app.agent import quality
+from app.agent import precision
+from app.merchant import promotions
+
+# How many ranked results the carousel receives. Was an implicit five, which
+# contradicted the sentence above it saying two dozen were found. High enough
+# that a screened set is shown whole in practice, bounded so a pathological
+# search cannot flood the socket.
+SHOWN_LIMIT = 40
+from app.adapters import sponsored_adapter
 from app.agent.mandates import (
     allowed_venues,
     issue_intent_mandate,
@@ -220,6 +229,14 @@ async def agent_pipeline(websocket: WebSocket):
         # Bound here because the screen only runs on a fresh search;
         # a refinement reuses listings already screened.
         screened = None
+        # Same reason, and one more: the precision checkpoint below runs on
+        # both paths, so this has to exist on both. A refinement re-shows
+        # listings, sponsored ones included, and a card shown again is a
+        # second placement — so it is tracked and charged again, bounded by
+        # the merchant's daily budget rather than by how often somebody
+        # narrows a search.
+        placements = promotions.PlacementRun([])
+        sponsored_pool = []
 
         await _agent(websocket, "intent", "running", tools=["ollama"])
 
@@ -278,10 +295,50 @@ async def agent_pipeline(websocket: WebSocket):
             # person has already answered.
             narrowed = refiner.apply(previous["candidates"], decision["ops"])
             candidates = narrowed["candidates"]
+            placements = promotions.PlacementRun(candidates)
+            sponsored_pool = [dict(c) for c in candidates if c.get("sponsored")]
             quantity = 1
             await _agent(websocket, "scout", "done",
                          f'{len(candidates)} of the previous results kept', tools=[])
             await _send(websocket, "step", narrowed["summary"])
+
+            # A refinement that could not be applied has to be said out
+            # loud, not filed in the trace.
+            #
+            # "under 5000" against a set that starts at ₹7,051 stands down
+            # rather than emptying the list — reasonable — but the only
+            # notice of that went out as a `step`, which lands inside the
+            # collapsed "How I got here" panel. On screen the person saw
+            # "I found the top 4 for you" above four listings costing more
+            # than the limit they had just named, and nothing saying why.
+            # A constraint about money is exactly the one that must not be
+            # quietly dropped.
+            if narrowed.get("skipped"):
+                cheapest = min((c.get("price_paise") or 0) for c in candidates)                     if candidates else 0
+                asked = decision["ops"].get("max_price_paise") or 0
+                await _send(websocket, "notice", {
+                    "kind": "refinement_not_applied",
+                    "headline": ("Nothing in these results is under "
+                                 f"₹{asked / 100:,.0f}."
+                                 if asked else
+                                 "That filter could not be applied."),
+                    # The suggested phrasing repeats the ORIGINAL query.
+                    # "search again under 5000" was the first wording here
+                    # and it routes to a fresh search whose category parses
+                    # as "search again" — the agent would have gone off and
+                    # queried eBay for that. Advice printed in the product
+                    # has to be advice that works.
+                    "detail": (
+                        f"The cheapest of them is ₹{cheapest / 100:,.0f}. "
+                        "These are still the previous results, unfiltered — "
+                        "shown so you can see what is actually available, "
+                        "not because they match what you asked for. To look "
+                        "for cheaper ones instead of narrowing these, ask "
+                        f"for “{previous['query']} under "
+                        f"{asked / 100:,.0f}”."
+                        if asked and cheapest else narrowed["summary"]),
+                    "skipped": narrowed["skipped"],
+                })
             if not candidates:
                 await _send(websocket, "error",
                             "Nothing in the last results matches that — try relaxing it.")
@@ -325,6 +382,16 @@ async def agent_pipeline(websocket: WebSocket):
             # took two of the five places on screen.
             candidates = deduplicate(candidates)
 
+            # Follows any promoted candidates from here to the screen. It
+            # only watches — every filter below runs on the same rules it
+            # ran on before retail media existed, and this records what
+            # they did to a sponsored card rather than softening it.
+            placements = promotions.PlacementRun(candidates)
+            # Kept before the screens run, because the complement strip is
+            # built from products the screens will drop — that is what it is
+            # for. The ranked answer above it is never drawn from here.
+            sponsored_pool = [dict(c) for c in candidates if c.get("sponsored")]
+
             # The filter above is eBay's; this is ours, and it also covers
             # the merchant store, whose products carry no eBay condition id.
             # First-party stock is new, so it is kept whenever new is wanted.
@@ -341,6 +408,7 @@ async def agent_pipeline(websocket: WebSocket):
                 and not (condition_conflict(c)
                          and not wanted_condition["stated"])
             ]
+            placements.after("condition", candidates)
             set_aside = before_condition - len(candidates)
             if wanted_condition["stated"]:
                 await _send(websocket, "step",
@@ -442,6 +510,7 @@ async def agent_pipeline(websocket: WebSocket):
                                         intent.get("requirements"),
                                         budget_paise=shaping_budget(intent))
             candidates = screened["candidates"]
+            placements.after("relevance", candidates)
             await _send(websocket, "step", screened["summary"])
             if screened.get("attribute_note"):
                 await _send(websocket, "step", screened["attribute_note"])
@@ -511,6 +580,7 @@ async def agent_pipeline(websocket: WebSocket):
                 trusted = [c for c in candidates if c["trust"]["ok"]]
                 if trusted:
                     candidates = trusted
+                    placements.after("trust", candidates)
 
             # Nothing is asked before the results are shown. The person came
             # with a sentence, and the next thing they should see is products
@@ -533,6 +603,16 @@ async def agent_pipeline(websocket: WebSocket):
             candidates = await asyncio.to_thread(enrich_reviews, candidates, 8)
         except Exception as exc:
             print(f"[quality] review lookup skipped: {exc}", flush=True)
+
+        # The precision stage: drop what eBay reports as unbuyable before
+        # anything ranks it or explains it. Same stage the autonomous path
+        # runs, so a person's search and an unattended one agree about what
+        # counts as a candidate.
+        precision_screen = precision.screen(candidates)
+        if precision_screen["dropped"]:
+            await _send(websocket, "step", precision_screen["summary"])
+        candidates = precision_screen["candidates"]
+        placements.after("precision", candidates)
 
         quality.annotate(candidates)
         reviewed = [c for c in candidates if (c.get("review_count") or 0) > 0]
@@ -569,7 +649,25 @@ async def agent_pipeline(websocket: WebSocket):
             "rating": lambda p: (-p["price_paise"],) if bias == "best" else (p["price_paise"],),
         }
         ranked = sorted(candidates, key=sort_keys.get(effective_sort, sort_keys["rating"]))
-        top_candidates = ranked[:5]
+
+        # Everything that survived the screens, in rank order — not the top
+        # five.
+        #
+        # The sentence above the carousel already says how many were found
+        # and how many were set aside, so showing five of eighteen made the
+        # agent look like it was hiding its work: the count was honest and
+        # the drawer was not. Scrolling right now walks the whole ranked
+        # list, best first, which is also the only way to see for yourself
+        # that the order is defensible.
+        #
+        # Capped so a very broad search cannot post hundreds of cards down a
+        # websocket; the cap is well above what a screened set reaches in
+        # practice, and the run says when it bites.
+        top_candidates = ranked[:SHOWN_LIMIT]
+        if len(ranked) > SHOWN_LIMIT:
+            await _send(websocket, "step",
+                        f"Showing the top {SHOWN_LIMIT} of {len(ranked)} that "
+                        f"survived screening — scroll for the rest")
 
         # Keep one slot for something the agent can actually buy.
         #
@@ -583,7 +681,7 @@ async def agent_pipeline(websocket: WebSocket):
         if not any(c.get("source") == "merchant" for c in top_candidates):
             buyable = next((c for c in ranked if c.get("source") == "merchant"), None)
             if buyable:
-                top_candidates = top_candidates[:4] + [buyable]
+                top_candidates = top_candidates[:SHOWN_LIMIT - 1] + [buyable]
                 await _send(
                     websocket, "step",
                     f"Holding a slot for {buyable.get('merchant_name') or 'the merchant'} — "
@@ -629,6 +727,45 @@ async def agent_pipeline(websocket: WebSocket):
             "product": product,
             "reason": result["reason"],
         })
+
+        # The complement strip: promoted products offered BESIDE the answer.
+        #
+        # Measured, not assumed — a promoted product competing inside the
+        # ranked results above has to pass the relevance screen, and across
+        # five products and twelve queries none ever did, because that
+        # screen and the store's own search both read the product name.
+        # What retail media actually sells is the complement, so it is
+        # offered as one, in its own strip, labelled as not being an answer
+        # to the search. It is exempt from relevance and nothing else.
+        complements = sponsored_adapter.complements(sponsored_pool, top_candidates)
+        if complements:
+            await _send(websocket, "sponsored", {
+                "items": complements,
+                "heading": f"Promoted by {complements[0].get('sponsored_by') or 'the merchant'}",
+                "disclosure": (
+                    "A complement, not an answer to your search. The merchant "
+                    "paid to show this here; it did not affect the results "
+                    "above, which were ranked on price, stock, condition and "
+                    "seller record alone."
+                ),
+            })
+
+        # Retail media settles here and nowhere earlier: a promoted product
+        # that was considered and then dropped by a screen costs the
+        # merchant nothing, because it never reached the shopper. Only the
+        # cards actually on screen are charged for.
+        if placements or complements:
+            placement_report = await asyncio.to_thread(
+                placements.settle, top_candidates + complements,
+                product.get("id"), customer["id"])
+            await _send(websocket, "placements", placement_report)
+            if placement_report["shown"]:
+                await _send(
+                    websocket, "step",
+                    f'{placement_report["shown"]} sponsored '
+                    f'{"result is" if placement_report["shown"] == 1 else "results are"} '
+                    f"in this list — promoted into consideration, then ranked "
+                    f"on the same signals as everything else")
 
         # Human-in-the-loop: the agent recommends, but the person chooses.
         # Nothing is charged until they pick — the frontend sends back
@@ -950,8 +1087,25 @@ async def agent_pipeline(websocket: WebSocket):
         # explanation. Report the failure so the person sees what broke.
         import traceback
         traceback.print_exc()
+        # A datastore outage is not a bug in the run, and "429 Quota
+        # exceeded" tells the person nothing they can act on. The HTTP
+        # routes already answer this case with a readable 503; the agent
+        # socket said the raw exception instead, so the same outage looked
+        # like two different failures depending on which screen you were on.
+        from google.api_core.exceptions import GoogleAPICallError, ResourceExhausted
+        if isinstance(exc, ResourceExhausted):
+            message = ("The project's Firestore has hit its free-tier daily "
+                       "read quota, so the agent cannot record this run. "
+                       "It resets at midnight US/Pacific. Nothing is broken "
+                       "and nothing was charged.")
+        elif isinstance(exc, GoogleAPICallError):
+            message = (f"The agent could not reach its datastore "
+                       f"({type(exc).__name__}), so the run was stopped "
+                       f"before anything was decided.")
+        else:
+            message = f"Agent run failed: {exc}"
         try:
-            await _send(websocket, "error", f"Agent run failed: {exc}")
+            await _send(websocket, "error", message)
             await websocket.close()
         except Exception:
             pass

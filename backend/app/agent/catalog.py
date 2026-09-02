@@ -13,42 +13,30 @@ def search_catalog(category: str, max_price_paise: int, sort: str = None,
     """
     Every venue the agent can see, in one list.
 
-    eBay is where the selection is; the UCP merchant is the one venue this
-    agent can actually pay. Both are searched, both are returned in the same
-    shape, and every downstream stage — trust, ranking, the risk gate,
-    the mandate chain — treats them identically. The `source` field is the
-    only thing that differs, and it exists so checkout knows who to talk to.
+    Asks every registered venue at once and merges what comes back. Which
+    venues exist is no longer this function's business — that lives in
+    app.adapters, so a new channel is a registration rather than an edit
+    here.
 
-    A merchant that is unreachable costs the run a few options and nothing
-    else; eBay being down likewise. The run only fails if neither answers.
+    eBay is where the selection is; the UCP store is the one venue this
+    agent can actually pay. Both are returned in the same shape, and every
+    downstream stage — trust, precision, ranking, the risk gate, the
+    mandate chain — treats them identically. `source` is the only thing
+    that differs, and it exists so checkout knows who to talk to.
+
+    A venue that is unreachable costs the run a few options and nothing
+    else. The run only fails if none of them answer.
     """
-    listings = _search_ebay(category, max_price_paise, sort, condition_ids)
-    for item in listings:
-        item.setdefault("source", "ebay")
+    from app.adapters import registry
 
-    # Resolve variation groups to the option actually requested. Done here,
-    # before trust and ranking, so every stage downstream reasons about the
-    # price that would really be charged rather than a group representative.
-    try:
-        from app.agent.ebay_client import resolve_variants
-        listings = resolve_variants(listings, category, requirements)
-        # A resolved price can land above the ceiling — the ten-pack that was
-        # inside budget is not the same purchase as the single unit.
-        if max_price_paise:
-            listings = [i for i in listings
-                        if (i.get("price_paise") or 0) <= max_price_paise]
-    except Exception as exc:
-        print(f"[catalog] variant resolution skipped: {exc}", flush=True)
+    listings, results = registry.search_all(
+        category, max_price_paise=max_price_paise,
+        condition_ids=condition_ids, requirements=requirements, sort=sort)
 
-    # Searched second and merged rather than replacing anything: the store is
-    # six products, and letting it crowd out a real marketplace would be
-    # dressing up a demo as a selection.
-    try:
-        from app.agent import merchant_client
-        listings += merchant_client.search(category, max_price_paise)
-    except Exception as exc:
-        print(f"[catalog] UCP merchant search skipped: {exc}", flush=True)
-
+    # Hung on the function so a caller can report which venues answered
+    # without the return type having to grow a second element. Every
+    # existing call site keeps working unchanged.
+    search_catalog.last_venues = [r.to_dict() for r in results]
     return listings
 
 

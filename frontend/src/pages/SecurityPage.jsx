@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Box, Chip, Stack, Typography } from "@mui/material";
 
 import PageBanner from "../components/shared/PageBanner";
+import ForgetSearches from "../components/shared/ForgetSearches";
 import LoadingState from "../components/shared/LoadingState";
 import { API_BASE } from "../config";
 
@@ -94,7 +95,7 @@ export default function SecurityPage() {
               {data.checked_for.length} kinds of sensitive data.
             </Typography>
 
-            <Stack direction="row" flexWrap="wrap" gap={0.75} sx={{ mt: 1.75 }}>
+            <Stack direction="row" useFlexGap sx={{ flexWrap: "wrap", gap: 0.75, mt: 1.75 }}>
               {data.checked_for.map((k) => (
                 <Chip
                   key={k}
@@ -129,7 +130,7 @@ export default function SecurityPage() {
               What comes back across that boundary is the whole of what the payment
               endpoint will accept:
             </Typography>
-            <Stack direction="row" flexWrap="wrap" gap={0.75} sx={{ mt: 1.25 }}>
+            <Stack direction="row" useFlexGap sx={{ flexWrap: "wrap", gap: 0.75, mt: 1.25 }}>
               {data.accepted_by_verify_payment.map((f) => (
                 <Chip key={f} size="small" label={f}
                       sx={{ fontFamily: "monospace", fontSize: 11 }} />
@@ -143,6 +144,14 @@ export default function SecurityPage() {
               . It can only start a payment. The secret that can move money stays on
               the server and is never sent to a browser.
             </Typography>
+          </Card>
+
+          {/* The page audits what is stored; this is the part that lets
+              someone do something about it. Placed before the inventory
+              because a control that acts is more use than a list that
+              only informs. */}
+          <Card title="Searches this agent remembers">
+            <ForgetSearches />
           </Card>
 
           <Card title="What is kept about you">
@@ -170,7 +179,7 @@ export default function SecurityPage() {
               the payment is represented by identifiers that mean nothing without
               Razorpay.
             </Typography>
-            <Stack direction="row" flexWrap="wrap" gap={0.75}>
+            <Stack direction="row" useFlexGap sx={{ flexWrap: "wrap", gap: 0.75 }}>
               {data.order_fields.map((f) => (
                 <Chip
                   key={f}

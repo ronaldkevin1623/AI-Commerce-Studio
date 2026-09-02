@@ -338,6 +338,44 @@ export default function ProductDetailDrawer({
           </Box>
         )}
 
+        {/* A promoted listing says so here too. The card carries the label,
+            but this drawer is where somebody decides to buy, and a
+            disclosure that only appears on the way past is not one. */}
+        {merged.sponsored && (
+          <Box
+            sx={{
+              p: 1.5, mb: 2, borderRadius: 1.5,
+              border: "1px dashed", borderColor: "rgba(148,163,184,0.5)",
+              bgcolor: "rgba(148,163,184,0.08)",
+            }}
+          >
+            <Typography variant="caption" sx={{ color: "text.primary", fontWeight: 700, display: "block" }}>
+              Sponsored by {merged.sponsored_by ?? "the merchant"}
+            </Typography>
+            <Typography variant="caption" sx={{ color: "text.secondary", lineHeight: 1.6, display: "block", mt: 0.5 }}>
+              {merged.sponsored_slot === "complement" ? (
+                <>
+                  The merchant paid to show this <strong>beside</strong> your results,
+                  not among them. It was not ranked against them and does not claim to
+                  answer your search &mdash; it is in the same category as what you
+                  found. It still had to be in stock and pass the same trust checks as
+                  everything else, and it changed nothing about the results themselves.
+                </>
+              ) : (
+                <>
+                  The merchant paid for this product to be <strong>considered</strong> for
+                  your search. That is the whole of what was bought. Its place in the
+                  list came from the same screens and the same ranking as everything
+                  else here: stock, price against its peers, condition, seller record
+                  and approval. Sponsorship is not an input to any of them, and a
+                  promoted listing is dropped by those screens exactly as an unpaid
+                  one is.
+                </>
+              )}
+            </Typography>
+          </Box>
+        )}
+
         {/* What this listing actually is, and what the agent can do with it.
             The distinction is not cosmetic: one of these the agent can pay
             for outright, the other it can only find. */}

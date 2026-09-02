@@ -15,6 +15,7 @@ import ProductDetailDrawer from "../components/console/ProductDetailDrawer";
 import CheckoutSheet from "../components/console/CheckoutSheet";
 import OrderConfirmation from "../components/console/OrderConfirmation";
 import CartPanel from "../components/console/CartPanel";
+import RecommendationStrip from "../components/console/RecommendationStrip";
 import { API_BASE, RAZORPAY_KEY_ID } from "../config";
 
 // One column width for the whole console. The transcript used to be 900px
@@ -271,6 +272,18 @@ export default function AgentConsolePage() {
             <Typography variant="caption" color="text.secondary" sx={{ mt: 2.5 }}>
               Try "wireless earbuds under ₹2000, fast delivery" — or type / for templates
             </Typography>
+
+            {/* Products first, because they are the useful thing on an empty
+                screen. Clicking one opens it in the detail drawer, which
+                re-fetches the listing live before anything can be bought —
+                a card is a snapshot of a past order, and the price or the
+                stock may have moved since. Searching again for a product
+                already on screen would just be a slower way back to it. */}
+            <Box sx={{ width: "100%", maxWidth: COLUMN }}>
+              <RecommendationStrip
+                onPick={(card, all) => handleOpenProduct(card, all)}
+              />
+            </Box>
           </Box>
         ) : (
         <Box

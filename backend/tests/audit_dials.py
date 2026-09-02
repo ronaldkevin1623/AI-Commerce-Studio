@@ -4,16 +4,21 @@ Does every dial on the hive actually change behaviour?
 For each setting: flip it, call the real agent function, and check the
 output differs. Uses synthetic candidate data where a live search isn't
 needed — that's a test fixture, not product output.
-
-Run from the backend directory, with the venv active and Ollama not
-required (the two LLM agents are stubbed so this stays fast):
-
-    python tools/audit_dials.py
-
-Resets every setting to its default on the way out.
 """
+import os
 import sys
-sys.path.insert(0, ".")
+from pathlib import Path
+
+# The backend package, found from this file rather than from where the
+# runner happened to be invoked — so a suite works the same whether it is
+# run on its own, through run_all.py, or from any directory.
+BACKEND = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(BACKEND))
+# The app resolves serviceAccountKey.json and the .env relative to the
+# working directory, so a suite has to stand where the server stands. Doing
+# it here rather than in the runner keeps every suite runnable on its own.
+os.chdir(BACKEND)
+sys.stdout.reconfigure(encoding="utf-8")
 
 from app.agent import settings
 from app.agent import trust_agent, budget_agent, risk_gate
@@ -71,15 +76,18 @@ check("budget.session_ceiling_inr", big != small,
       f"'{big}' at Rs20000 ceiling vs '{small}' at Rs100")
 
 # ── budget.warn_at_pct ───────────────────────────────────────────────────
-# The projected spend has to land BETWEEN the two thresholds for this to
-# prove anything: Rs6,000 against a Rs20,000 ceiling is 30%, so it's under
-# a 75% warn line and over a 10% one.
 set_to("budget", "session_ceiling_inr", 20000)
+# Rs5,000 spent plus a Rs5,000 order against a Rs20,000 ceiling is a ratio
+# of 0.5 — below 75% and above 10%, so the two settings must disagree. The
+# previous fixture used Rs10,000 + Rs5,000, which lands on exactly 0.75:
+# both thresholds fire, and the dial looks broken when it is the test
+# standing on the boundary.
+warn_customer = {"total_spend_paise": 500000}
 set_to("budget", "warn_at_pct", 75)
-w75 = budget_agent.assess({"total_spend_paise": 500000}, 100000)["status"]
+w75 = budget_agent.assess(warn_customer, 500000)["status"]
 set_to("budget", "warn_at_pct", 10)
-w10 = budget_agent.assess({"total_spend_paise": 500000}, 100000)["status"]
-check("budget.warn_at_pct", w75 != w10, f"'{w75}' at 75% vs '{w10}' at 10% (30% of ceiling used)")
+w10 = budget_agent.assess(warn_customer, 500000)["status"]
+check("budget.warn_at_pct", w75 != w10, f"'{w75}' at 75% vs '{w10}' at 10%")
 
 # ── risk.auto_approve_limit_inr ──────────────────────────────────────────
 cust = {"id": "audit-cust", "trust_score": 100}

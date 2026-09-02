@@ -121,6 +121,45 @@ SPEC: dict[str, dict[str, dict]] = {
             "note": "How far back the purchase count looks.",
         },
     },
+    # Level 5: what the agent may do with nobody watching. Every bound here
+    # is deliberately tighter than its interactive equivalent — the agent
+    # acting alone is trusted with less than the agent acting in front of
+    # somebody, which is the only version of "full autonomy" worth shipping.
+    "autonomy": {
+        "enabled": {
+            "kind": "bool", "default": False,
+            "label": "Buy without asking", "financial": True,
+            "note": "The kill switch. Off by default: autonomous spending is "
+                    "something a person turns on, never something they "
+                    "discover has been happening.",
+        },
+        "max_order_inr": {
+            "kind": "int", "min": 0, "max": 20000, "default": 1500,
+            "label": "Unattended order cap", "prefix": "₹", "financial": True,
+            "note": "Most a single unattended order may cost. Lower than the "
+                    "interactive auto-approve limit on purpose.",
+        },
+        "monthly_cap_inr": {
+            "kind": "int", "min": 0, "max": 100000, "default": 5000,
+            "label": "30-day unattended ceiling", "prefix": "₹", "financial": True,
+            "note": "Total the agent may spend unattended across a rolling 30 "
+                    "days, so a short cycle cannot drain a month by staying "
+                    "under the per-order cap every time.",
+        },
+        "min_confidence_pct": {
+            "kind": "int", "min": 0, "max": 100, "default": 60,
+            "label": "Confidence floor", "suffix": "%", "financial": True,
+            "note": "Below this the purchase is not refused — it is handed "
+                    "back as a confirmation, which is the honest answer to "
+                    "'probably due'.",
+        },
+        "lead_days": {
+            "kind": "int", "min": 0, "max": 14, "default": 0,
+            "label": "Order this early", "suffix": "d",
+            "note": "Buy this many days before the predicted run-out date, to "
+                    "cover delivery. 0 orders on the day.",
+        },
+    },
     "negotiator": {
         "goal": {
             "kind": "enum",

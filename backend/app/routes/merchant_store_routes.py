@@ -21,6 +21,7 @@ from pydantic import BaseModel
 
 from app.merchant import store
 from app.merchant import growth as growth_metrics
+from app.merchant import promotions
 from app.agent import idempotency
 from app.firebase_client import log_decision
 from app.razorpay_client import create_order, fetch_payment
@@ -402,3 +403,65 @@ def merchant_growth(days: int = 30):
 def seed_catalogue(force: bool = False):
     """Write the operator-declared catalogue into Firestore."""
     return {"written": store.seed(force=force), "products": len(store.SEED)}
+
+
+# ── Retail media ─────────────────────────────────────────────────────────
+#
+# What a merchant can buy from this agent, and what they cannot, is set out
+# in app/merchant/promotions.py. The short version, which the UI repeats
+# rather than hiding: a promotion buys consideration for category-adjacent
+# searches the store's own keyword match would miss, and a label if the
+# product then earns a place. It buys nothing in the ranking.
+
+class NewPromotion(BaseModel):
+    product_id: str
+    bid_paise: int
+    daily_budget_paise: int
+    active: bool = True
+
+
+@router.get("/promotions")
+def list_promotions():
+    """
+    Every promotion, with what it has actually done.
+
+    `considered` is what the merchant paid for the chance at; `placed` is
+    what reached a shopper and was charged; `screened_out` is what the
+    agent's filters dropped, with the stage named — that last number is the
+    one worth acting on, because a placement dying at precision usually
+    means the catalogue says out of stock.
+    """
+    rows = promotions.list_all()
+    return {
+        "promotions": rows,
+        "accrued_today_paise": sum(p["spent_today_paise"] for p in rows),
+        "active": sum(1 for p in rows if p["active"] and not p["exhausted"]),
+        # Repeated in the payload so no surface can render this as revenue
+        # owed or an invoice raised.
+        "billed": False,
+        "billing_note": ("Spend is accrued per placement against the daily "
+                         "budget and written to the decision log. Nothing "
+                         "bills it — this build has no merchant billing rail."),
+        "buys": ["Consideration for category-adjacent searches",
+                 "A sponsored label if the product earns a place"],
+        "does_not_buy": ["Any position in the ranking",
+                         "Exemption from relevance, trust or stock screens",
+                         "Any change to the risk gate or the mandate"],
+    }
+
+
+@router.post("/promotions")
+def upsert_promotion(body: NewPromotion):
+    result = promotions.set_promotion(
+        body.product_id, bid_paise=body.bid_paise,
+        daily_budget_paise=body.daily_budget_paise, active=body.active)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("error"))
+    return result
+
+
+@router.delete("/promotions/{product_id}")
+def delete_promotion(product_id: str):
+    if not promotions.remove(product_id):
+        raise HTTPException(status_code=404, detail="No such promotion.")
+    return {"ok": True, "removed": product_id}

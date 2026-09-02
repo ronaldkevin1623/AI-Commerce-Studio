@@ -9,6 +9,27 @@
  * than one a judge can trust.
  */
 
+/**
+ * The nodes that actually change what the agent does.
+ *
+ * Each of these owns a section in the backend's settings spec, so its dials
+ * are read at run time by the code that makes the decision — moving Trust's
+ * outlier floor from 10 to 80 takes the same twenty-five live listings from
+ * 0 flagged to 10. Everything else on the canvas is real machinery too, but
+ * it has nothing to turn: Payment creates a Razorpay order, Fulfilment moves
+ * an order forward, and neither takes a parameter a person would set.
+ *
+ * Derived from the backend spec rather than guessed: if a section is added
+ * there and not here, the node simply is not marked, which is the failure
+ * that costs nothing.
+ */
+export const TUNABLE = new Set([
+  "intent", "scout", "trust", "value", "budget", "risk", "negotiator",
+  "ollama", "ebay",
+]);
+
+export const isTunable = (id) => TUNABLE.has(id);
+
 export const TIER = { YOU: 0, HIVE: 1, CLUSTER: 2, SPECIALIST: 3, TOOL: 4 };
 
 /** Tier 4 — the external services agents actually call. */

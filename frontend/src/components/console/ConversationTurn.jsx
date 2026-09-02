@@ -7,6 +7,7 @@ import ReasoningStream from "./ReasoningStream";
 import HiveCanvas from "../hive/HiveCanvas";
 import RiskGateIndicator from "./RiskGateIndicator";
 import ProductCarousel from "./ProductCarousel";
+import SponsoredSlot from "./SponsoredSlot";
 import TransactionTimeline from "./TransactionTimeline";
 import EscalationBanner from "./EscalationBanner";
 import MandateChainCard from "./MandateChainCard";
@@ -31,6 +32,13 @@ function deriveAnswer(events) {
   let shown = null;
   let pick = null;
   let reason = null;
+  // Carried on the answer rather than counted into it: the complement strip
+  // is not one of the results and the sentence above must not say it is.
+  let sponsored = null;
+  // A filter the agent could not apply. Kept on the answer so it renders
+  // beside the results it qualifies, rather than inside the collapsed
+  // trace where a dropped budget went unnoticed.
+  let notice = null;
   let blocked = null;
   // Which venues actually came back with something. The agent used to
   // announce "live eBay listings" unconditionally, which stopped being true
@@ -94,6 +102,10 @@ function deriveAnswer(events) {
       pick = event.payload.product?.name;
       reason = event.payload.reason;
     }
+    // Kept apart from `candidates` deliberately: this is not part of the
+    // answer and must never be counted as one of the results shown.
+    if (event.type === "sponsored") sponsored = event.payload;
+    if (event.type === "notice") notice = event.payload;
     if (event.type === "error") blocked = event.payload;
     if (event.type === "risk_gate" && event.payload.decision === "blocked") {
       blocked = event.payload.reason;
@@ -124,13 +136,24 @@ function deriveAnswer(events) {
     );
   }
   if (shown) {
-    parts.push(`${parts.length ? "Here are" : "I found"} the top ${shown} for you`);
+    // When a filter could not be applied, "here are the top N for you"
+    // is the wrong sentence: these are not what was asked for, and saying
+    // so only in the amber box below meant the headline still claimed a
+    // clean answer. The sentence itself has to carry the miss.
+    parts.push(
+      notice
+        ? `Nothing matched that, but here ${shown === 1 ? "is" : "are"} ` +
+          `${shown === 1 ? "the closest option" : `the ${shown} closest options`}`
+        : `${parts.length ? "Here are" : "I found"} the top ${shown} for you`
+    );
   }
   if (pick && reason) {
     const trimmed = reason.replace(/\s*$/, "").replace(/\.$/, "");
     parts.push(`I'd go with the ${pick} — ${trimmed.charAt(0).toLowerCase()}${trimmed.slice(1)}`);
   }
-  return parts.length ? { text: `${parts.join(". ")}.`, blocked: false } : null;
+  return parts.length
+    ? { text: `${parts.join(". ")}.`, blocked: false, sponsored, notice }
+    : null;
 }
 
 function deriveState(events) {
@@ -346,6 +369,29 @@ export default function ConversationTurn({
               {answer.text}
             </Typography>
 
+            {/* A constraint the agent could not honour, said before the
+                cards rather than after them. Amber, not red: nothing has
+                failed, but these results do not match what was asked. */}
+            {answer.notice && (
+              <Box
+                sx={{
+                  mb: 1.75, p: 1.5, borderRadius: 1.5,
+                  border: "1px solid", borderColor: "rgba(245,158,11,0.45)",
+                  bgcolor: "rgba(245,158,11,0.08)",
+                }}
+              >
+                <Typography variant="body2" sx={{ fontWeight: 600, color: "warning.main" }}>
+                  {answer.notice.headline}
+                </Typography>
+                <Typography
+                  variant="caption"
+                  sx={{ color: "text.secondary", display: "block", mt: 0.5, lineHeight: 1.65 }}
+                >
+                  {answer.notice.detail}
+                </Typography>
+              </Box>
+            )}
+
             {selectionPrompt && (
               <>
                 <ProductCarousel
@@ -360,6 +406,11 @@ export default function ConversationTurn({
                 </Typography>
               </>
             )}
+
+            <SponsoredSlot
+              payload={answer.sponsored}
+              onOpen={(product, list) => onOpenProduct?.(product, list)}
+            />
 
             {/* The trace is the project's whole claim, so it stays — but
                 folded away, because nobody reads it on every turn. */}

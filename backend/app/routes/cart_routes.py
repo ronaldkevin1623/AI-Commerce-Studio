@@ -23,7 +23,8 @@ from app.agent import merchant_client
 from app.agent.budget_agent import assess as budget_assess
 from app.agent.risk_gate import evaluate as risk_evaluate
 from app.agent import settings
-from app.agent.mandates import issue_intent_mandate, issue_cart_mandate, verify_chain
+from app.agent.mandates import (issue_intent_mandate, issue_cart_mandate,
+                                verify_chain, _registered_venues)
 from app.firebase_client import (
     get_or_create_customer,
     log_decision,
@@ -155,7 +156,10 @@ def _do_cart_checkout(req: CartCheckout, idempotency_key: str = None,
     risk = risk_evaluate(
         customer,
         {**basket, "source": "merchant" if from_merchant else "ebay"},
-        allowed_venues={"ebay", "merchant"},
+        # Same list the mandate would name, read from the registry rather
+        # than written out here, so adding a venue does not leave checkout
+        # refusing it for a reason no one can find.
+        allowed_venues=set(_registered_venues()),
     )
 
     over_ceiling = budget["status"] == "exceeded"

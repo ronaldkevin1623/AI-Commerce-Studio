@@ -1,5 +1,7 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from google.api_core.exceptions import GoogleAPICallError, ResourceExhausted
 
 from app.routes import (
     agent_routes,
@@ -19,9 +21,47 @@ from app.routes import (
     preflight_routes,
     image_routes,
     product_check_routes,
+    autonomy_routes, venue_routes, recommend_routes,
 )
 
 app = FastAPI(title="AI Commerce Studio API")
+
+
+# ── When the store itself is unavailable ─────────────────────────────────
+#
+# Found by a test run during a Firestore free-tier quota outage: seven
+# endpoints — including /merchant/catalog, which is the one a BUYING AGENT
+# reads over UCP — turned a datastore error into an unhandled 500 with a
+# stack trace in the log and "Internal Server Error" on the wire.
+#
+# That is the wrong answer twice over. An agent cannot tell a 500 from a
+# broken integration, so it has no way to know the shop is fine and merely
+# unreachable; and this project's whole position is that a component which
+# cannot answer should say so rather than failing opaquely. 503 with a
+# readable reason is what a caller can actually act on, and it matches how
+# the buyer side already treats an unreachable venue: fewer options, not a
+# broken run.
+@app.exception_handler(GoogleAPICallError)
+async def datastore_unavailable(request: Request, exc: GoogleAPICallError):
+    quota = isinstance(exc, ResourceExhausted)
+    print(f"[store] {request.url.path} could not read the datastore: "
+          f"{type(exc).__name__}: {exc}", flush=True)
+    return JSONResponse(
+        status_code=503,
+        content={
+            "error": "datastore_unavailable",
+            "detail": ("The project's Firestore has hit its free-tier daily "
+                       "quota, so this endpoint cannot read its records "
+                       "right now. It resets at midnight Pacific."
+                       if quota else
+                       "This endpoint could not reach its datastore."),
+            "retryable": True,
+            # Named so a buying agent can tell "the shop has nothing for you"
+            # from "the shop could not be asked" — which are different facts
+            # and should not both look like an empty catalogue.
+            "is_empty_result": False,
+        },
+    )
 
 # Loosened for hackathon dev — tighten allow_origins before any real deployment
 app.add_middleware(
@@ -48,6 +88,9 @@ app.include_router(security_routes.router)
 app.include_router(preflight_routes.router)
 app.include_router(image_routes.router)
 app.include_router(product_check_routes.router)
+app.include_router(autonomy_routes.router)
+app.include_router(venue_routes.router)
+app.include_router(recommend_routes.router)
 
 
 @app.get("/health")

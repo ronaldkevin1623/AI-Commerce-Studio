@@ -1,0 +1,32 @@
+/*
+ * The background the app sits on — a fine graph-paper grid.
+ *
+ * Plain CSS rather than the styled-components version supplied: that library
+ * is not a dependency here, and adding a runtime CSS-in-JS engine to draw one
+ * static background would be a poor trade. The declarations below are the
+ * ones from that snippet, unchanged — same colour, same two crossed
+ * gradients, same 55px cell.
+ *
+ * Fixed behind everything at z-index 0 and pointer-events: none, so it can
+ * never intercept a click or move the layout of what sits on top. The bar,
+ * the sidebar and every card keep their own opaque surfaces, so the grid
+ * shows through only where the app is empty — which is where it was wanted.
+ */
+
+.pattern-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+
+  --color: rgba(114, 114, 114, 0.3);
+  background-color: #191a1a;
+  background-image:
+    linear-gradient(0deg, transparent 24%, var(--color) 25%, var(--color) 26%,
+      transparent 27%, transparent 74%, var(--color) 75%, var(--color) 76%,
+      transparent 77%, transparent),
+    linear-gradient(90deg, transparent 24%, var(--color) 25%, var(--color) 26%,
+      transparent 27%, transparent 74%, var(--color) 75%, var(--color) 76%,
+      transparent 77%, transparent);
+  background-size: 55px 55px;
+}

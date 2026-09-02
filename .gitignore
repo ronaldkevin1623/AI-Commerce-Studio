@@ -9,3 +9,14 @@ venv/
 # pointed the credentials at a project that does not exist and took the whole
 # backend down. Credentials are not text to be find-and-replaced.
 backend/serviceAccountKey.json
+
+# Runtime heartbeat from tests/rerun_when_quota_resets.py — a record of a
+# particular night, not part of the project.
+backend/quota_rerun.log
+backend/.env.realdata.bak
+backend/firebase.json
+
+# Sector datasets: raw CSVs are large and are not version-controlled.
+# backend/data/trip/README.md explains how to rebuild the index from them.
+backend/data/*/raw/
+backend/data/**/*.sqlite

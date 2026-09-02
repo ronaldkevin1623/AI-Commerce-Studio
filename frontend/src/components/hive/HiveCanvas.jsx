@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Box, Button, Stack, Typography } from "@mui/material";
 import RestartAltIcon from "@mui/icons-material/RestartAlt";
 import { useNavigate } from "react-router-dom";
@@ -55,7 +55,8 @@ function relatedSet(id) {
   return set;
 }
 
-export default function HiveCanvas({ mode = "map", events = [], clusters }) {
+export default function HiveCanvas({ mode = "map", events = [], clusters,
+                                    onlyTunable = false }) {
   const navigate = useNavigate();
   const svgRef = useRef(null);
   const dragRef = useRef(null);
@@ -69,9 +70,16 @@ export default function HiveCanvas({ mode = "map", events = [], clusters }) {
 
   const settings = useHiveSettings();
 
-  const H = useMemo(() => layoutHeight(clusters), [clusters]);
-  const base = useMemo(() => defaultLayout(clusters), [clusters]);
-  const wires = useMemo(() => edges(clusters), [clusters]);
+  const H = useMemo(() => layoutHeight(clusters, onlyTunable), [clusters, onlyTunable]);
+  const base = useMemo(() => defaultLayout(clusters, onlyTunable), [clusters, onlyTunable]);
+
+  // Positions a person dragged belong to the layout they dragged them in.
+  // Narrowing to the tunable nodes makes a shorter canvas, and the offsets
+  // from the taller one left YOU and the hive sitting over the header.
+  useEffect(() => {
+    setMoved({});
+  }, [onlyTunable, clusters]);
+  const wires = useMemo(() => edges(clusters, onlyTunable), [clusters, onlyTunable]);
 
   const nodes = useMemo(
     () => base.map((n) => (moved[n.id] ? { ...n, ...moved[n.id] } : n)),

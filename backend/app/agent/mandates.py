@@ -175,9 +175,32 @@ def issue_intent_mandate(intent: dict, customer_id: str) -> str:
             # which refuses an order against anything not named here — the
             # value used to say EBAY_US only, and nothing enforced it, so it
             # was a claim rather than a control.
-            "checkout.allowed_marketplaces": ["ebay", "merchant"],
+            #
+            # Taken from the venues registered at the moment of signing,
+            # not a fixed pair. That keeps the list honest as channels are
+            # added, and keeps the authorisation bounded: a venue plugged
+            # in after this mandate was signed is NOT covered by it, and
+            # the gate will refuse it until the person authorises again.
+            # Registering an adapter must never be a way to become payable.
+            "checkout.allowed_marketplaces": _registered_venues(),
         },
     })
+
+
+def _registered_venues() -> list[str]:
+    """
+    The venues that exist right now, by name.
+
+    Deliberately not `describe()`: that probes reachability, and a venue
+    being briefly unreachable is no reason to write it out of the person's
+    authorisation. Falls back to the two built-in venues if the registry
+    cannot be read, so signing never fails over this.
+    """
+    try:
+        from app.adapters import registry
+        return sorted(a.name for a in registry.adapters())
+    except Exception:
+        return ["ebay", "merchant"]
 
 
 def allowed_venues(intent_jwt: str) -> set | None:
