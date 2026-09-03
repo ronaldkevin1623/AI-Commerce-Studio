@@ -146,7 +146,30 @@ try:
     # skipped the refunded one and quietly proved nothing about it.
     moved = [p for p in captured if p["status"] in ("captured", "refunded")]
     known = {o.get("razorpay_payment_id") for o in real_paid}
+
+    # CHECKOUTS STILL IN FLIGHT ARE NOT UNRECORDED MONEY.
+    #
+    # A checkout is an order, then a human on a bank page, then a capture.
+    # Between the capture and verify-payment running, Razorpay has the
+    # money and this app has no payment id for it — which is exactly the
+    # shape of a genuine orphan, and is not one. Reconciling in that window
+    # reports a real payment as missing.
+    #
+    # So the open register is consulted and those orders are held out,
+    # named rather than silently skipped. The register self-expires, so a
+    # truly abandoned checkout returns to being reconciled normally instead
+    # of being excused forever.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    try:
+        from app import inflight
+        in_flight = {r["order_id"] for r in inflight.active()}
+    except Exception as exc:
+        in_flight = set()
+        print(f"  [note] in-flight register unreadable ({exc}) — "
+              f"reconciling everything")
+
     orphans = []
+    deferred = []
     for pay in moved:
         if pay["id"] in known:
             continue
@@ -157,13 +180,24 @@ try:
         # Only this app's own receipts. The merchant half of the loop
         # creates its own Razorpay order for the same purchase, so counting
         # those would report a phantom gap on every legitimate sale.
-        if str(order.get("receipt") or "").startswith("cp-"):
-            orphans.append((pay["id"], pay["status"], pay["amount"]))
+        if not str(order.get("receipt") or "").startswith("cp-"):
+            continue
+        if pay.get("order_id") in in_flight:
+            deferred.append((pay["id"], pay["amount"]))
+            continue
+        orphans.append((pay["id"], pay["status"], pay["amount"]))
+
+    note = ""
+    if deferred:
+        note = (f" [{len(deferred)} held out as still in flight: "
+                + "; ".join(f"{pid} Rs{amt/100:,.2f}" for pid, amt in deferred[:3])
+                + "]")
     check("No payment moved money without this app recording the order",
           not orphans,
-          "; ".join(f"{pid} ({st}) Rs{amt/100:,.2f}" for pid, st, amt in orphans[:3])
-          or f"{len(moved)} payments moved money, all recorded "
-             f"({len([p for p in moved if p['status'] == 'refunded'])} refunded)")
+          ("; ".join(f"{pid} ({st}) Rs{amt/100:,.2f}" for pid, st, amt in orphans[:3])
+           or f"{len(moved)} payments moved money, all recorded "
+              f"({len([p for p in moved if p['status'] == 'refunded'])} refunded)")
+          + note)
 
     ids = {o.get("razorpay_payment_id") for o in real_paid}
     # "refunded" is a captured payment that was later returned, so it counts

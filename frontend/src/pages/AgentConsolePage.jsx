@@ -1,15 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Box, Stack, Typography } from "@mui/material";
+import { Box, Chip, Stack, Typography } from "@mui/material";
 import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import ErrorOutlineIcon from "@mui/icons-material/ErrorOutlineOutlined";
+import FlightTakeoffIcon from "@mui/icons-material/FlightTakeoffOutlined";
+import CloseIcon from "@mui/icons-material/CloseOutlined";
 
 import { useConversation } from "../context/ConversationContext";
-import ChatSidebar from "../components/console/ChatSidebar";
 import { useRole } from "../context/RoleContext";
+import ChatSidebar from "../components/console/ChatSidebar";
 import ConversationTurn from "../components/console/ConversationTurn";
 import ClarifyCard from "../components/console/ClarifyCard";
 import PromptBar from "../components/console/PromptBar";
+import TripItinerary from "../components/console/TripItinerary";
 import AbandonRunDialog from "../components/console/AbandonRunDialog";
 import ProductDetailDrawer from "../components/console/ProductDetailDrawer";
 import CheckoutSheet from "../components/console/CheckoutSheet";
@@ -55,6 +58,8 @@ export default function AgentConsolePage() {
   const checkoutTriggeredRef = useRef(false);
   const transcriptEndRef = useRef(null);
 
+  // The shell carries a sidebar once a role is chosen, so the console only
+  // renders its own when there is none — otherwise there are two.
   const { role } = useRole();
   const sidebarLayout = Boolean(role);
 
@@ -71,6 +76,25 @@ export default function AgentConsolePage() {
   // A cart checkout creates its own order outside the WebSocket run, so it
   // can't come from the order_created event like a single purchase does.
   const [cartOrder, setCartOrder] = useState(null);
+  // Trip results live beside the product transcript rather than
+  // inside it: an itinerary is one answer, not a turn in a search.
+  const [trip, setTrip] = useState(null);
+  const [tripBusy, setTripBusy] = useState(false);
+  const [bookingStay, setBookingStay] = useState(false);
+  // WHICH SECTOR THE AGENT IS CURRENTLY FOR.
+  //
+  // Sticky, not per-message. Naming a sector is a statement about what
+  // you are doing next — you plan a trip over several turns, refining
+  // it. Requiring "/trip" on every line would make the prefix a chore
+  // and the mode a fiction. Products stays the default, and typing
+  // /products returns to it.
+  const [activeSector, setActiveSector] = useState("products");
+  // WHAT THE AGENT ALREADY KNOWS ABOUT THIS TRIP, and which question it is
+  // waiting on. Planning is a conversation — "Kolkata for 3 days" then
+  // "Delhi" — and without carrying this the second message reads as a
+  // brand new trip TO Delhi and the first one is silently thrown away.
+  const [tripNeed, setTripNeed] = useState({});
+  const [tripAwaiting, setTripAwaiting] = useState("");
 
   const {
     events,
@@ -107,19 +131,136 @@ export default function AgentConsolePage() {
   // "busy" left no way to ask for anything else.
   const busyThinking = isRunning && !pendingSelection && !pendingApproval;
 
-  const handleSend = (text) => {
+  // Only an explicit `/trip` reaches the trip sector. With no prefix this
+  // is the products path it has always been, called the same way — the
+  // requirement was that the default behaviour not change, and the way to
+  // keep that promise is for the default to not go through new code.
+  const handleSend = (text, meta) => {
+    // An explicit prefix wins for this message; otherwise the active
+    // sector handles it. With no sector ever chosen this is "products",
+    // which is the path the app has always taken.
+    const sector = meta?.sectorId ?? activeSector;
+    if (sector === "trip") {
+      runTrip(text, meta?.sectorId ? "explicit_slash" : "active_sector");
+      return;
+    }
+    // A products search clears any itinerary on screen. Leaving it pinned
+    // above the results meant a stale "Still needed: Flying from?" sat over
+    // a search for a phone, reading as though the agent were still waiting
+    // on an answer it had stopped caring about.
+    setTrip(null);
     const started = startRun(text);
     if (started) checkoutTriggeredRef.current = false;
   };
 
+  const runTrip = async (text, source) => {
+    setTripBusy(true);
+    setTrip({ question: text, plan: null });
+    try {
+      const res = await fetch(`${API_BASE}/trip/plan`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        // Everything established so far travels with each message, and
+        // `answer_for` says which question this text answers — so "Delhi"
+        // fills the origin instead of replacing the destination.
+        body: JSON.stringify({
+          ...tripNeed,
+          text,
+          answer_for: tripAwaiting || "",
+          sector_source: source,
+        }),
+      });
+      const plan = await res.json();
+      // Remember what it now knows, and what it is still waiting for.
+      if (plan?.understood) setTripNeed((n) => ({ ...n, ...plan.understood }));
+      if (plan?.ok) {
+        setTripAwaiting("");
+      } else {
+        setTripAwaiting(plan?.needs?.[0]?.name || "");
+      }
+      setTrip({ question: text, plan });
+    } catch {
+      setTrip({
+        question: text,
+        plan: { ok: false, detail: "The trip sector could not be reached." },
+      });
+    } finally {
+      setTripBusy(false);
+    }
+  };
+
+  // The one payable leg. It sends the hotel's record id and nothing about
+  // the price — the amount is derived server-side from that row, so what
+  // is charged cannot be changed from here.
+  const bookStay = async (payable) => {
+    setBookingStay(true);
+    try {
+      const res = await fetch(`${API_BASE}/trip/book`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        // The originating request travels with the booking so the server can
+        // re-run the itinerary and confirm this hotel is the one that won.
+        // Sending only the record id would let any dataset row be charged
+        // for at an honest price but under a false claim about which
+        // itinerary it belonged to.
+        body: JSON.stringify({
+          hotel_record_id: payable.record_id,
+          nights: payable.nights,
+          text: trip?.question || "",
+        }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        openCheckout({
+          razorpay_order_id: data.razorpay_order_id,
+          amount_paise: data.amount_paise,
+          product_name: `${data.hotel.name} — ${data.breakdown.nights} night(s)`,
+        });
+      }
+    } finally {
+      setBookingStay(false);
+    }
+  };
+
   const handleImage = (payload) => {
     checkoutTriggeredRef.current = false;
+    setTrip(null);
     startPhotoSearch(payload);
   };
 
   const handleNewChat = () => {
     checkoutTriggeredRef.current = false;
+    setTrip(null);
+    setActiveSector("products");
+    setTripNeed({});
+    setTripAwaiting("");
     newChat();
+  };
+
+  // Switching sector clears the other sector's answer off the screen —
+  // an itinerary sitting above a product search reads as though the agent
+  // were still working on it.
+  // What the agent says it is for right now. One place, so the heading,
+  // the hint and the mode chip can never disagree with the routing.
+  const SECTOR_FACE = {
+    products: {
+      heading: "What should I buy for you?",
+      hint: 'Try "wireless earbuds under ₹2000, fast delivery" — or type / for templates',
+    },
+    trip: {
+      heading: "Let's plan your trip",
+      hint: "Tell me where you are going, from where, and for how many nights — type /products to go back to shopping",
+    },
+  };
+
+  const handleSectorChange = (sectorId) => {
+    setActiveSector(sectorId);
+    if (sectorId !== "trip") setTrip(null);
+    // Leaving or re-entering the sector starts a fresh trip. Carrying a
+    // half-answered itinerary across a mode switch would surface as the
+    // agent remembering something the person thought they had left.
+    setTripNeed({});
+    setTripAwaiting("");
   };
 
 
@@ -246,7 +387,7 @@ export default function AgentConsolePage() {
         {/* Empty state: greeting and composer centred in the viewport,
             so a fresh session feels like an invitation rather than a
             blank page with a toolbar stuck to the bottom. */}
-        {transcript.length === 0 ? (
+        {transcript.length === 0 && !trip ? (
           <Box
             sx={{
               flex: 1,
@@ -261,16 +402,19 @@ export default function AgentConsolePage() {
             <Stack direction="row" spacing={1.5} sx={{ alignItems: "center", mb: 3 }}>
               <AutoAwesomeIcon sx={{ fontSize: 26, color: "primary.light" }} />
               <Typography variant="h1" sx={{ fontSize: 30, fontWeight: 500 }}>
-                What should I buy for you?
+                {(SECTOR_FACE[activeSector] ?? SECTOR_FACE.products).heading}
               </Typography>
             </Stack>
 
             <Box sx={{ width: "100%", maxWidth: COLUMN }}>
-              <PromptBar onSend={handleSend} onImage={handleImage} disabled={busyThinking} tall />
+              <PromptBar onSend={handleSend} onImage={handleImage}
+                          onSectorChange={handleSectorChange}
+                          activeSector={activeSector}
+                          disabled={busyThinking} tall />
             </Box>
 
             <Typography variant="caption" color="text.secondary" sx={{ mt: 2.5 }}>
-              Try "wireless earbuds under ₹2000, fast delivery" — or type / for templates
+              {(SECTOR_FACE[activeSector] ?? SECTOR_FACE.products).hint}
             </Typography>
 
             {/* Products first, because they are the useful thing on an empty
@@ -279,11 +423,17 @@ export default function AgentConsolePage() {
                 a card is a snapshot of a past order, and the price or the
                 stock may have moved since. Searching again for a product
                 already on screen would just be a slower way back to it. */}
-            <Box sx={{ width: "100%", maxWidth: COLUMN }}>
-              <RecommendationStrip
-                onPick={(card, all) => handleOpenProduct(card, all)}
-              />
-            </Box>
+            {/* Products only. These are ranked from past PURCHASES and
+                product searches, so offering a USB-C cable to someone who
+                just said they are planning a trip is the agent talking
+                about the wrong thing. */}
+            {activeSector === "products" && (
+              <Box sx={{ width: "100%", maxWidth: COLUMN }}>
+                <RecommendationStrip
+                  onPick={(card, all) => handleOpenProduct(card, all)}
+                />
+              </Box>
+            )}
           </Box>
         ) : (
         <Box
@@ -299,6 +449,20 @@ export default function AgentConsolePage() {
           }}
         >
           <Box sx={{ maxWidth: COLUMN, mx: "auto" }}>
+            {trip && (
+              <Box sx={{ mb: 2.5 }}>
+                <Typography variant="body2" sx={{ mb: 1.25, fontWeight: 500 }}>
+                  {trip.question}
+                </Typography>
+                {tripBusy ? (
+                  <Typography variant="caption" color="text.secondary">
+                    Assembling an itinerary from the flight, hotel and restaurant data…
+                  </Typography>
+                ) : (
+                  <TripItinerary plan={trip.plan} onBook={bookStay} booking={bookingStay} />
+                )}
+              </Box>
+            )}
             {transcript.map((turn) => (
               <Box key={turn.id} id={`turn-${turn.id}`}>
                 <ConversationTurn
@@ -337,7 +501,7 @@ export default function AgentConsolePage() {
 
         {/* Once a conversation exists the composer docks to the bottom.
             No hard divider — just breathing room and a soft shadow. */}
-        {transcript.length > 0 && (
+        {(transcript.length > 0 || trip) && (
         <Box sx={{ px: 3, pt: 1, pb: 3 }}>
           <Box sx={{ maxWidth: COLUMN, mx: "auto" }}>
             {paymentStatus === "confirmed" && (
@@ -345,7 +509,27 @@ export default function AgentConsolePage() {
                 <PaymentStatusBanner status={paymentStatus} />
               </Box>
             )}
-            <PromptBar onSend={handleSend} onImage={handleImage} disabled={busyThinking} />
+            {/* A mode you cannot see is a mode you will forget you are in,
+                and then wonder why asking for earbuds returned a flight. */}
+            {activeSector !== "products" && (
+              <Stack direction="row" spacing={1} sx={{ alignItems: "center", mb: 1 }}>
+                <Chip
+                  size="small"
+                  icon={<FlightTakeoffIcon sx={{ fontSize: 14 }} />}
+                  label="Planning a trip"
+                  onDelete={() => handleSectorChange("products")}
+                  deleteIcon={<CloseIcon sx={{ fontSize: 14 }} />}
+                  sx={{ height: 22, fontSize: 11 }}
+                />
+                <Typography variant="caption" color="text.secondary">
+                  Type <strong>/products</strong> to go back to shopping
+                </Typography>
+              </Stack>
+            )}
+            <PromptBar onSend={handleSend} onImage={handleImage}
+                       onSectorChange={handleSectorChange}
+                       activeSector={activeSector}
+                       disabled={busyThinking} />
           </Box>
         </Box>
         )}

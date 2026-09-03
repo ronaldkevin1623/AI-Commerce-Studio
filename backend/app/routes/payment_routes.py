@@ -9,7 +9,8 @@ this gives you a genuine, real-time confirmation path without ngrok.)
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from app.razorpay_client import fetch_payment, capture_payment, create_order
+from app.razorpay_client import (fetch_payment, capture_payment, create_order,
+                                 fetch_order)
 from app.agent.risk_gate import evaluate as risk_evaluate
 from app.agent import merchant_client
 from app.firebase_client import (
@@ -33,6 +34,51 @@ class VerifyPaymentRequest(BaseModel):
 
 @router.post("/verify-payment")
 def verify_payment(req: VerifyPaymentRequest):
+    # THE SPLIT CHECK.
+    #
+    # A checkout has two halves separated by a human on a bank page. If the
+    # server restarts between them and comes back bound to a different
+    # datastore, the order is in one store and this capture is about to be
+    # written to another. Neither store then holds a complete record, and
+    # nothing anywhere says why.
+    #
+    # This cannot repair that — the other store may not even be reachable
+    # from here. What it can do is refuse to record it silently, which is
+    # the difference between an anomaly someone can trace and a number that
+    # is quietly wrong.
+    try:
+        from app.firebase_client import (store_binding,
+                                         record_for_razorpay_order)
+        existing, kind = record_for_razorpay_order(req.razorpay_order_id)
+        if existing is None:
+            log_decision(
+                action_type="order_missing_locally",
+                amount_paise=0,
+                decision="flagged",
+                reason=(f"Capture {req.razorpay_payment_id} arrived for order "
+                        f"{req.razorpay_order_id}, which has no record in this "
+                        f"datastore (binding={store_binding()}). Either the "
+                        f"order was created under a different datastore "
+                        f"binding, or it was never stored. Money may have "
+                        f"moved without a local order behind it."),
+                order_id=req.razorpay_order_id,
+                customer_id=req.customer_id,
+            )
+        elif existing.get("store") and existing["store"] != store_binding():
+            log_decision(
+                action_type="datastore_binding_changed",
+                amount_paise=int(existing.get("amount_paise") or 0),
+                decision="flagged",
+                reason=(f"{kind.capitalize()} {req.razorpay_order_id} was created against "
+                        f"{existing['store']} but is being confirmed against "
+                        f"{store_binding()}. The two halves of this checkout "
+                        f"landed in different datastores."),
+                order_id=req.razorpay_order_id,
+                customer_id=req.customer_id,
+            )
+    except Exception as exc:
+        print(f"[payment] split check skipped: {exc}", flush=True)
+
     # Razorpay raises for an unknown id rather than returning a status, so an
     # unverifiable payment has to be refused explicitly — otherwise it leaves
     # here as a 500 with a stack trace instead of a clear "not verified".
@@ -81,14 +127,47 @@ def verify_payment(req: VerifyPaymentRequest):
     if status == "captured":
         update_order_status(req.razorpay_order_id, "paid",
                             payment_id=req.razorpay_payment_id)
+        # If this order came from a sector that names the record it is
+        # paying for, put that record in THIS row rather than leaving it
+        # to be joined from the order-creation row. "Traceable via a join"
+        # and "traceable" are not the same claim, and the one that was
+        # asked for is the stronger one: hotel record → asserted price →
+        # capture id, all visible in the row that records the capture.
+        provenance = ""
+        try:
+            notes = (payment.get("notes") or {}) if isinstance(payment, dict) else {}
+            if not notes.get("hotel_record_id"):
+                notes = fetch_order(req.razorpay_order_id).get("notes") or {}
+            if notes.get("hotel_record_id"):
+                provenance = (
+                    f" [sector={notes.get('sector')} leg={notes.get('leg')} "
+                    f"record={notes['hotel_record_id']} "
+                    f"name={notes.get('hotel_name')!r} "
+                    f"asserted={int(amount) / 100:,.2f} "
+                    f"capture={req.razorpay_payment_id}] "
+                    f"The amount was derived from that dataset row, not from "
+                    f"the client. Demo-merchant stand-in, not a hotel booking."
+                )
+        except Exception as exc:
+            # A missing provenance note must never fail a confirmed payment.
+            print(f"[payment] provenance lookup failed: {exc}", flush=True)
+
         log_decision(
             action_type="payment_confirmed",
             amount_paise=amount,
             decision="allowed",
-            reason="Payment verified directly via Razorpay Payments API",
+            reason=("Payment verified directly via Razorpay Payments API"
+                    + provenance),
             order_id=req.razorpay_order_id,
             customer_id=req.customer_id,
         )
+        # A trip is only 'booked' once its stay is actually captured.
+        try:
+            from app.firebase_client import mark_trip_booked
+            mark_trip_booked(req.razorpay_order_id, req.razorpay_payment_id)
+        except Exception as exc:
+            print(f"[payment] trip not marked booked: {exc}", flush=True)
+
         if req.customer_id:
             adjust_trust_score(req.customer_id, 2)
 

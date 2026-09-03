@@ -51,6 +51,10 @@ export const ROUTE_ROLES = {
   "/hive": "customer",
   "/approvals": "customer",
   "/orders": "customer",
+  // Added after the split was restored: the trip sector is a buyer-side
+  // surface and belongs behind the same gate the other buyer pages sit
+  // behind, or a merchant lands on somebody else's itineraries.
+  "/trips": "customer",
   "/merchant": "merchant",
 };
 

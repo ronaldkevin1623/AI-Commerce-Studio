@@ -58,3 +58,14 @@ def verify_webhook_signature(payload_body: bytes, signature_header: str) -> bool
         digestmod=hashlib.sha256,
     ).hexdigest()
     return hmac.compare_digest(expected_signature, signature_header)
+
+def fetch_order(order_id: str) -> dict:
+    """
+    Read an order back from Razorpay.
+
+    Used to recover the notes an order was created with — which is where a
+    sector records what the money was for. Reading it back from Razorpay
+    rather than from our own database is the point: it means the link
+    survives independently of anything this app stores.
+    """
+    return client.order.fetch(order_id)

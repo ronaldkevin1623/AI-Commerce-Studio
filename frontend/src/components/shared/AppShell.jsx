@@ -4,9 +4,9 @@ import { Link, useLocation } from "react-router-dom";
 import ShoppingBagIcon from "@mui/icons-material/ShoppingBagOutlined";
 
 import { useCart } from "../../context/CartContext";
-import { useRole } from "../../context/RoleContext";
-import RoleSwitcher from "./RoleSwitcher";
 import AppSidebar from "./AppSidebar";
+import RoleSwitcher from "./RoleSwitcher";
+import { useRole } from "../../context/RoleContext";
 import Logo from "./Logo";
 import Pattern from "./Pattern";
 
@@ -33,11 +33,13 @@ export default function AppShell({ children }) {
   const location = useLocation();
   const { totals, setOpen: setCartOpen, lastAdded, dismissAdded } = useCart();
   const cartCount = totals.count;
-  const { role } = useRole();
 
   // Before a side is picked the landing page IS the choice, so the bar
   // carries the mark and nothing else — a nav full of tools you have not
   // chosen a role for is just noise.
+  const { role } = useRole();
+  // No sidebar, no cart and no switcher until a side has been chosen —
+  // otherwise the landing page shows the tools of a role nobody picked.
   const chosen = Boolean(role);
 
   // The landing page is where the role gets chosen, so it carries none of the
@@ -149,6 +151,10 @@ export default function AppShell({ children }) {
             </Box>
             )}
 
+            {/* The switcher sits beside the mode chip rather than only on
+                the landing page: seeing the other side of the transaction
+                in one click matters more than making the choice feel
+                weighty, and a demo needs to cross between them quickly. */}
             {chosen && !onLanding && <RoleSwitcher />}
 
             <Chip

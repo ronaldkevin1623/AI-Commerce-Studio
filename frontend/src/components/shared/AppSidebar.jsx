@@ -18,6 +18,8 @@ import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import HubOutlinedIcon from "@mui/icons-material/HubOutlined";
 import FactCheckOutlinedIcon from "@mui/icons-material/FactCheckOutlined";
 import ReceiptLongOutlinedIcon from "@mui/icons-material/ReceiptLongOutlined";
+import FlightTakeoffOutlinedIcon from "@mui/icons-material/FlightTakeoffOutlined";
+import StorefrontOutlinedIcon from "@mui/icons-material/StorefrontOutlined";
 
 import { useConversation } from "../../context/ConversationContext";
 import { useRole } from "../../context/RoleContext";
@@ -49,15 +51,15 @@ const ROW_H = 32;
 const PRIMARY_BY_ROLE = {
   customer: [
     { label: "Home", icon: <HomeOutlinedIcon />, path: "/console" },
+    { label: "Trips", icon: <FlightTakeoffOutlinedIcon />, path: "/trips" },
     { label: "Hive", icon: <HubOutlinedIcon />, path: "/hive" },
     { label: "Approvals", icon: <FactCheckOutlinedIcon />, path: "/approvals" },
     { label: "Orders", icon: <ReceiptLongOutlinedIcon />, path: "/orders" },
   ],
   merchant: [
     { label: "Home", icon: <HomeOutlinedIcon />, path: "/console" },
-    { label: "Hive", icon: <HubOutlinedIcon />, path: "/merchant/hive" },
+    { label: "Storefront", icon: <StorefrontOutlinedIcon />, path: "/merchant/products" },
     { label: "Orders", icon: <ReceiptLongOutlinedIcon />, path: "/merchant/orders" },
-    { label: "Products", icon: <LocalOfferOutlinedIcon />, path: "/merchant/products" },
     { label: "Growth", icon: <SpeedOutlinedIcon />, path: "/merchant/growth" },
     { label: "Analytics", icon: <BarChartOutlinedIcon />, path: "/merchant" },
   ],

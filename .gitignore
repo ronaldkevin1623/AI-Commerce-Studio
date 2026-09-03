@@ -20,3 +20,24 @@ backend/firebase.json
 # backend/data/trip/README.md explains how to rebuild the index from them.
 backend/data/*/raw/
 backend/data/**/*.sqlite
+
+# Firestore emulator export. Contains real order and payment records
+# from test mode — not secrets, but not ours to publish either.
+firebase-export/
+emulator-dump.json
+
+# Ephemeral in-flight checkout markers — runtime state, never committed.
+backend/.inflight/
+
+# Per-process datastore binding registry. Runtime state naming live PIDs —
+# meaningless on another machine and actively misleading if committed.
+backend/.bindings/
+
+# Emulator and test-run output. Regenerated on every run; committing it
+# just makes every diff noisy.
+firebase-debug.log
+firestore-debug.log
+backend/firebase-debug.log
+backend/firestore-debug.log
+backend/quota_rerun_report.txt
+backend/quota_rerun.log

@@ -39,6 +39,7 @@ function monogram(name) {
 
 export default function RecommendationStrip({ onPick }) {
   const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
   const scroller = useRef(null);
   const [edges, setEdges] = useState({ left: false, right: false });
 
@@ -47,7 +48,8 @@ export default function RecommendationStrip({ onPick }) {
     fetch(`${API_BASE}/recommendations`)
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => alive && setData(d))
-      .catch(() => alive && setData(null));
+      .catch(() => alive && setData(null))
+      .finally(() => alive && setLoading(false));
     return () => {
       alive = false;
     };
@@ -77,6 +79,79 @@ export default function RecommendationStrip({ onPick }) {
   }, [data]);
 
   const cards = data?.cards ?? [];
+
+  // A ROW THAT IS COMING IS NOT A ROW THAT IS ABSENT.
+  //
+  // The first call after a restart tops the ranking up with live
+  // marketplace lookups, which can take ten seconds or more on a cold
+  // cache. Rendering nothing during that reads as "there are no
+  // recommendations" — the space is silent, and the honest states below
+  // never get a chance to speak.
+  if (loading) {
+    return (
+      <Box sx={{ width: "100%", maxWidth: 980, mx: "auto", mt: 4, px: 1 }}>
+        <Typography
+          variant="caption"
+          sx={{ display: "block", color: "text.disabled", letterSpacing: 0.4,
+                fontWeight: 600, mb: 1.25 }}
+        >
+          PICKED UP WHERE YOU LEFT OFF
+        </Typography>
+        <Stack direction="row" spacing={1.5} sx={{ overflow: "hidden" }}>
+          {[0, 1, 2, 3, 4].map((i) => (
+            <Box
+              key={i}
+              sx={{
+                width: 168, flexShrink: 0, borderRadius: 2,
+                border: "1px solid", borderColor: "divider",
+                bgcolor: "background.paper", overflow: "hidden",
+              }}
+            >
+              <Box sx={{ height: 116, bgcolor: "rgba(255,255,255,0.03)" }} />
+              <Box sx={{ p: 1.25 }}>
+                <Box sx={{ height: 10, borderRadius: 1, mb: 0.75,
+                           bgcolor: "rgba(255,255,255,0.06)" }} />
+                <Box sx={{ height: 10, width: "60%", borderRadius: 1,
+                           bgcolor: "rgba(255,255,255,0.04)" }} />
+              </Box>
+            </Box>
+          ))}
+        </Stack>
+        <Typography variant="caption" color="text.secondary"
+                    sx={{ display: "block", mt: 1 }}>
+          Ranking your orders and searches, and checking current listings…
+        </Typography>
+      </Box>
+    );
+  }
+
+  // THREE STATES, NOT TWO.
+  //
+  // Returning null for everything meant "your history could not be read"
+  // and "you have no history" looked identical: the row simply vanished.
+  // The first is a temporary outage worth explaining; the second is a new
+  // account, where an empty box would be clutter. Only the second stays
+  // silent.
+  if (!cards.length && data?.datastore_unavailable) {
+    return (
+      <Box sx={{ width: "100%", maxWidth: 980, mx: "auto", mt: 4, px: 1 }}>
+        <Box
+          sx={{
+            p: 1.75, borderRadius: 2, border: "1px dashed",
+            borderColor: "divider", bgcolor: "rgba(210,153,34,0.06)",
+          }}
+        >
+          <Typography variant="caption" sx={{ display: "block", fontWeight: 600, mb: 0.5 }}>
+            Recommendations are unavailable right now
+          </Typography>
+          <Typography variant="caption" color="text.secondary" sx={{ lineHeight: 1.6 }}>
+            {data.note}
+          </Typography>
+        </Box>
+      </Box>
+    );
+  }
+
   if (!cards.length) return null;
 
   const nudge = (direction) =>

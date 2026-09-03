@@ -72,6 +72,11 @@ SUITES = [
     ("audit_dials",          {"net", "model"},  "Every tunable setting is read somewhere that matters"),
     ("audit_22_surfaces",    {"net", "store"},  "All 15 documented routes, asserted on real content"),
     ("audit_23_pipeline",    {"net", "store"},  "14 of the 15 pipeline stages, each with a case built to fail it"),
+    # Needs the datastore only. The growth agents read the store's own
+    # records and spend the merchant's margin — no marketplace, no payment
+    # provider — so this suite still runs when eBay is rate-limiting or
+    # Razorpay is unreachable, which is a property worth keeping.
+    ("audit_24_growth",      {"store"},         "The merchant-side gate: five bounds, and campaigns that can end"),
 ]
 
 # Suites that report in their own words rather than "N passed · N failed".

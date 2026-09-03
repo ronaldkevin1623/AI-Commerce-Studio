@@ -33,7 +33,9 @@ sys.stdout.reconfigure(encoding="utf-8")
 
 import httpx
 
-BASE = "http://127.0.0.1:8010"
+# Overridable so the refusal paths can be exercised against a stub server
+# without a real backend, and with no possibility of a real write.
+BASE = os.environ.get("CARTPILOT_SEED_BASE", "http://127.0.0.1:8010")
 
 # Priced so the live eBay result lands under the Rs1,500 per-order cap for
 # the cable and over it for the coffee. That contrast is the demo: the
@@ -58,15 +60,46 @@ def step(label: str, fn) -> bool:
 
 def main() -> int:
     try:
-        httpx.get(f"{BASE}/health", timeout=5).raise_for_status()
+        # ASK THE SERVER WHICH STORE IT IS ON, do not infer it.
+        #
+        # This used to read this process's own environment and .env text.
+        # That was wrong in a way that gets worse now .env never changes:
+        # the seeder writes through a RUNNING SERVER over HTTP, and that
+        # server's datastore is fixed by how IT was launched. The two can
+        # disagree, and the seeder would then announce "emulator" while
+        # filling real Firestore with demo rows.
+        health = httpx.get(f"{BASE}/health", timeout=5)
+        health.raise_for_status()
     except Exception:
         print(f"\nNothing is listening on {BASE}.")
         print("Start the backend first, then run this again.\n")
         return 1
 
-    emulator = bool(os.environ.get("FIRESTORE_EMULATOR_HOST")) or \
-        "FIRESTORE_EMULATOR_HOST" in (BACKEND / ".env").read_text(encoding="utf-8")
-    print(f"\nSeeding demo state ({'emulator' if emulator else 'REAL Firestore'})\n")
+    binding = (health.json() or {}).get("datastore")
+    if not binding:
+        # An older server that does not report it. Refusing beats guessing:
+        # seeding demo rows into real Firestore by accident is the exact
+        # mistake this check exists to prevent.
+        print("\nThat server does not report which datastore it uses.")
+        print("Refusing to seed rather than guess.\n")
+        return 1
+
+    emulator = binding.startswith("emulator")
+    if not emulator and "--allow-real" not in sys.argv:
+        # REFUSE, do not merely warn.
+        #
+        # This writes demo rows — seeded orders, a demo promotion, a stub
+        # catalogue. Once they are in the store they are indistinguishable
+        # from real activity, and the money reconciliation reads that same
+        # store. A warning printed above a wall of progress output is not a
+        # decision anybody actually makes. Requiring the flag is.
+        print(f"\nThat server is on REAL Firestore ({binding}).")
+        print("Refusing to seed demo rows into real data.")
+        print("\nIf that is genuinely what you want: re-run with --allow-real\n")
+        return 1
+
+    print(f"\nSeeding demo state via {BASE} -> {binding}"
+          f"{'' if emulator else '   *** REAL FIRESTORE, --allow-real given ***'}\n")
 
     ok = True
     ok &= step("merchant catalogue", lambda: str(

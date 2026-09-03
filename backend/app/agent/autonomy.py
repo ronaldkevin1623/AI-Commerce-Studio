@@ -7,7 +7,7 @@ money unattended with nothing between the prediction and the card is not
 impressive, it is reckless, and any judge who has thought about it for ten
 seconds will ask what stops it.
 
-So every autonomous purchase passes five gates, and each one can only ever
+So every autonomous purchase passes six gates, and each one can only ever
 say no:
 
   1. The kill switch. One flag, checked first, that stops everything.
@@ -123,7 +123,7 @@ def _bought_recently(customer_id: str, name: str, now: float,
     This exists because the autonomous path had no duplicate guard at all
     while the interactive one did. Running the replenishment twice inside
     twenty seconds — a cron that double-fires, a retry, a person clicking
-    again — bought the same cable twice, and every one of the five gates
+    again — bought the same cable twice, and every one of the other five gates
     passed both times, because each was individually true. "Bounded
     unattended spending" has to mean bounded across runs, not just within
     one.

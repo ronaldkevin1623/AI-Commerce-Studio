@@ -10,6 +10,8 @@ import ErrorOutlineIcon from "@mui/icons-material/ErrorOutlineOutlined";
 import OpenInNewIcon from "@mui/icons-material/OpenInNew";
 
 import { API_BASE } from "../config";
+import GrowthQueue from "../components/growth/GrowthQueue";
+import CampaignPanel from "../components/growth/CampaignPanel";
 
 const DISMISS_KEY = "commerce-studio.growth.heroDismissed";
 
@@ -119,6 +121,11 @@ export default function MerchantGrowthPage() {
           Growth
         </Typography>
       </Stack>
+
+      {/* The agents come first: what wants to happen to margin today is
+          more urgent than last week's chart. */}
+      <GrowthQueue card={CARD} />
+      <CampaignPanel card={CARD} />
 
       {heroOpen && (
         <Box sx={{ ...CARD, position: "relative", mb: 3, p: 2.5 }}>

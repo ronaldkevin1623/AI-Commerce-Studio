@@ -23,9 +23,15 @@
  * there and not here, the node simply is not marked, which is the failure
  * that costs nothing.
  */
+// MUST MIRROR THE KEYS OF `SPEC` IN backend/app/agent/settings.py.
+//
+// This is a duplicated list and therefore a place things drift: the trip
+// sector got its dials on the backend and stayed unclickable here until
+// "trip" was added below. If a node has dials on the server and is not in
+// this set, the hive quietly presents it as untunable.
 export const TUNABLE = new Set([
   "intent", "scout", "trust", "value", "budget", "risk", "negotiator",
-  "ollama", "ebay",
+  "trip", "growthgate", "ollama", "ebay",
 ]);
 
 export const isTunable = (id) => TUNABLE.has(id);
@@ -39,6 +45,12 @@ export const TOOLS = [
     label: "The AI model",
     technical: "Ollama · qwen2.5:7b",
     what: "Local LLM inference, qwen2.5:7b. Runs on this machine — no API key, no cloud round-trip, no per-token cost.",
+  },
+  {
+    id: "tripdata",
+    label: "Trip datasets",
+    technical: "Flights · Hotels · Restaurants",
+    what: "300,153 fares, 580 hotels and 31,297 restaurants across six Indian metros, loaded from the supplied CSVs. Real values, but a snapshot: no availability is asserted for any date and prices do not move. Needs no network, which is why the trip sector works with the wifi off.",
   },
   {
     id: "ebay",
@@ -87,7 +99,16 @@ export const CLUSTERS = [
     glyph: "◈",
     route: "/merchant",
     state: "partial",
-    what: "The merchant half of the track: reads the decisions already in Firestore and turns them into revenue actions. Insights is built; recovery and offers are not.",
+    what: "The merchant half of the track: reads the decisions already in Firestore and turns them into revenue actions. Insights, cart recovery and cross-sell are built and pass a merchant-side gate; discount testing and price watching are not.",
+  },
+  {
+    id: "planner",
+    label: "Planning a trip",
+    technical: "Trip Sector",
+    glyph: "✈",
+    route: "/trips",
+    state: "live",
+    what: "The second sector. Products ranking picks the best row from a list; a trip is a SET chosen jointly — the hotel must be in the city the flight reaches, the meals near the hotel that won, and the budget applies to the sum. That dependency between choices is why this is a sector and not a category.",
   },
   {
     id: "aftercare",
@@ -169,6 +190,50 @@ export const SPECIALISTS = [
     op: "POST /merchant/checkout/{id}/fulfil",
   },
   // ── Buyer ────────────────────────────────────────────────────────────
+  {
+    id: "sector",
+    label: "Chooses the sector",
+    technical: "Sector Router",
+    glyph: "⌗",
+    cluster: "planner",
+    state: "live",
+    tools: [],
+    what: "Decides whether a request is shopping or travel. Each sector scores its own claim rather than one central map of every sector's vocabulary — that map is the thing that would need editing every time a sector is added. Returns every score, not just the winner, and asks when two are too close to call.",
+    op: "POST /sectors/classify",
+  },
+  {
+    id: "tripintent",
+    label: "Reads your trip",
+    technical: "Trip Intent",
+    glyph: "◈",
+    cluster: "planner",
+    state: "live",
+    tools: [],
+    what: "Pulls destination, origin, nights, party size and budget out of a sentence, and carries what it already knows across turns — so answering \"Delhi\" fills the origin instead of starting a new trip to Delhi. Names a destination the datasets do not cover instead of quietly substituting another city.",
+    op: "POST /trip/plan",
+  },
+  {
+    id: "trip",
+    label: "Assembles the itinerary",
+    technical: "Trip Assembler",
+    glyph: "✦",
+    cluster: "planner",
+    state: "live",
+    tools: ["tripdata"],
+    what: "Chooses a flight, then a hotel in the city that flight reaches, then meals near the hotel that won — each choice constrained by the ones before it, and the budget checked against the sum rather than any single leg. Hotel ratings are shrunk toward the city mean so four reviews cannot beat four hundred.",
+    op: "greedy assembly under constraints",
+  },
+  {
+    id: "tripstay",
+    label: "Pays for the stay",
+    technical: "Stay Checkout",
+    glyph: "◆",
+    cluster: "planner",
+    state: "partial",
+    tools: ["razorpay", "tripdata"],
+    what: "The one payable leg. The browser sends a hotel record id and no price; the amount is re-read from that dataset row and the itinerary re-run to confirm this is the hotel that won. A real Razorpay capture, tied to that record — but a demo-merchant stand-in, not a booking: no room is held and no hotel is contacted.",
+    op: "POST /trip/book",
+  },
   {
     id: "intent",
     label: "Understands you",
@@ -265,21 +330,54 @@ export const SPECIALISTS = [
     technical: "Cart Recovery",
     glyph: "↺",
     cluster: "growth",
-    state: "planned",
-    tools: ["firestore", "ollama", "razorpay"],
-    what: "Reads real run_abandoned decisions, drafts a recovery nudge, and issues a genuine Razorpay Payment Link so the abandoned cart can still convert.",
-    op: "Not built yet",
+    state: "live",
+    tools: ["firestore"],
+    what: "Reads checkout sessions that were opened and never paid, and proposes a time-boxed discount on that specific cart, sized by how cold it is. There is no email or SMS rail here, so it makes the cart worth returning to rather than chasing anyone — a smaller claim than a demo would be tempted to make. One live offer per cart, so approvals cannot stack margin onto the same customer.",
+    op: "GET /growth/scan",
+  },
+  {
+    id: "crosssell",
+    label: "Suggests what goes with it",
+    technical: "Cross-Sell",
+    glyph: "⊞",
+    cluster: "growth",
+    state: "live",
+    tools: ["firestore"],
+    what: "Learns which products were actually bought together from this store's own orders. Where there is no co-purchase history it falls back to category adjacency and labels which it used — \"bought together twice\" and \"both filed under cables\" are very different strengths of claim. Costs nothing: it fills a slot already on the page.",
+    op: "GET /growth/scan",
+  },
+  {
+    id: "campaigns",
+    label: "Runs a campaign",
+    technical: "Campaign Orchestrator",
+    glyph: "◇",
+    cluster: "growth",
+    state: "live",
+    tools: ["firestore"],
+    what: "Turns individual proposals into a bounded programme: a goal, an envelope, a window and a set of agents. The envelope sits INSIDE the growth gate rather than replacing it, so whichever binds first wins. It ends three ways — budget spent, window closed, or a person pauses it — and a fourth was added after testing found it could tick forever with a balance too small to buy anything. It never approves an escalation on a person's behalf.",
+    op: "POST /growth/campaigns/{id}/tick",
+  },
+  {
+    id: "growthgate",
+    label: "Bounds what agents give away",
+    technical: "Growth Gate",
+    glyph: "⬡",
+    cluster: "growth",
+    state: "live",
+    tools: ["firestore"],
+    what: "The merchant-side mirror of the buyer's risk gate. A discount is a money action even though nothing is charged, so it passes five bounds — kill switch, per-action cap, daily cap, a percentage ceiling, and an evidence floor that refuses to spend margin on a sample too thin to mean anything. Every bound can only say no, and no agent clears its own proposal.",
+    op: "app/growth/gate.py",
   },
   {
     id: "offer",
     label: "Tests discounts",
-    technical: "Offer",
+    technical: "Discount Experiment",
     glyph: "%",
     cluster: "growth",
-    state: "planned",
+    state: "live",
     tools: ["firestore"],
-    what: "Tests whether discounted listings actually convert better in this project's own order history, and sizes a discount from that evidence rather than a guess.",
-    op: "Not built yet",
+    what: "Groups applied recovery offers by the discount level they carried and compares how many converted. Its main job is refusing to call a coin flip a result: below five outcomes per level it reports \"not enough to tell them apart\" rather than ranking levels on noise, and where two levels are within a few points it prefers the cheaper one because that costs less margin for the same outcome.",
+    op: "GET /growth/scan",
   },
 
   // ── Post-purchase ────────────────────────────────────────────────────

@@ -21,7 +21,7 @@ from app.routes import (
     preflight_routes,
     image_routes,
     product_check_routes,
-    autonomy_routes, venue_routes, recommend_routes,
+    autonomy_routes, venue_routes, recommend_routes, sector_routes, growth_agent_routes, x402_routes, acp_routes,
 )
 
 app = FastAPI(title="AI Commerce Studio API")
@@ -91,8 +91,17 @@ app.include_router(product_check_routes.router)
 app.include_router(autonomy_routes.router)
 app.include_router(venue_routes.router)
 app.include_router(recommend_routes.router)
+app.include_router(sector_routes.router)
+app.include_router(growth_agent_routes.router)
+app.include_router(x402_routes.router)
+app.include_router(acp_routes.router)
 
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    # The datastore is reported because it is the one thing a caller cannot
+    # work out for itself. Anything talking to this server over HTTP —
+    # the seeder especially — was previously guessing from its OWN
+    # environment, which can disagree with the server's and did.
+    from app.firebase_client import store_binding
+    return {"status": "ok", "datastore": store_binding()}

@@ -37,6 +37,30 @@ from app.merchant import promotions
 # that a screened set is shown whole in practice, bounded so a pathological
 # search cannot flood the socket.
 SHOWN_LIMIT = 40
+
+
+def _without_budget(query: str) -> str:
+    """
+    Strip a price ceiling out of a query so a new one can be appended.
+
+    The stand-down notice suggests re-asking with a lower budget, built as
+    "<original query> under <new figure>". The original already carried its
+    own ceiling, so the suggestion came out as "wireless earbuds under 2000
+    under 500" — two budgets in one sentence, which is not a query anybody
+    should be told to type. Advice printed in the product has to be advice
+    that works.
+    """
+    import re as _re
+    cleaned = _re.sub(
+        r"\s*\b(?:under|below|within|upto|up\s+to|less\s+than)\b\s*"
+        r"(?:₹|rs\.?|inr)?\s*[\d,]+\s*(?:k|thousand)?\b",
+        # A space, not an empty string: the pattern eats the whitespace on
+        # both sides, so removing a clause from the middle would weld the
+        # words either side of it together.
+        " ", query or "", flags=_re.I)
+    return " ".join(cleaned.split()).strip(" ,-") or (query or "").strip()
+
+
 from app.adapters import sponsored_adapter
 from app.agent.mandates import (
     allowed_venues,
@@ -334,7 +358,7 @@ async def agent_pipeline(websocket: WebSocket):
                         "shown so you can see what is actually available, "
                         "not because they match what you asked for. To look "
                         "for cheaper ones instead of narrowing these, ask "
-                        f"for “{previous['query']} under "
+                        f"for “{_without_budget(previous['query'])} under "
                         f"{asked / 100:,.0f}”."
                         if asked and cheapest else narrowed["summary"]),
                     "skipped": narrowed["skipped"],

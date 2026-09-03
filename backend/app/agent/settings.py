@@ -181,6 +181,90 @@ SPEC: dict[str, dict[str, dict]] = {
             "note": "Passed to Ollama as temperature ÷ 100. Lower is more repeatable.",
         },
     },
+    # THE MERCHANT-SIDE BOUNDS.
+    #
+    # The buyer's caps stop it spending the shopper's money. These stop the
+    # growth agents giving away the merchant's. Same bar, opposite pocket —
+    # a discount is a money action even though nothing is charged.
+    "growthgate": {
+        "enabled": {
+            "kind": "bool", "default": False,
+            "label": "Growth agents", "financial": True,
+            "note": "Master switch. Off means growth agents may still look "
+                    "and propose, but nothing they suggest can be applied.",
+        },
+        "max_giveaway_inr": {
+            "kind": "int", "min": 0, "max": 5000, "default": 200,
+            "label": "Per action", "prefix": "₹", "financial": True,
+            "note": "The most margin one growth action may give away. Above "
+                    "this it escalates to a person instead of being applied.",
+        },
+        "daily_cap_inr": {
+            "kind": "int", "min": 0, "max": 50000, "default": 500,
+            "label": "Per day", "prefix": "₹", "financial": True,
+            "note": "The most all growth actions together may give away in a "
+                    "day, totalled from the decision log rather than a "
+                    "counter that could drift from it.",
+        },
+        "max_discount_pct": {
+            "kind": "int", "min": 0, "max": 60, "default": 15,
+            "label": "Deepest discount", "suffix": "%", "financial": True,
+            "note": "A percentage bound as well as a rupee one, because 20% "
+                    "off a cable and 20% off a laptop are very different "
+                    "amounts of margin.",
+        },
+        "min_sample": {
+            "kind": "int", "min": 1, "max": 50, "default": 3,
+            "label": "Evidence needed",
+            "note": "How many observations a costed action needs before it "
+                    "runs unattended. Below this it escalates: a "
+                    "recommendation from one data point may be right, but "
+                    "spending margin on it is guessing.",
+        },
+    },
+    # THE TRIP SECTOR'S OWN DIALS.
+    #
+    # These are the constants the assembler actually reads while choosing a
+    # flight, a hotel and meals. Moving one and re-planning the same trip
+    # produces a different itinerary, which is the whole reason for putting
+    # them on the hive rather than leaving them in the source.
+    "trip": {
+        "flight_share_pct": {
+            "kind": "int", "min": 10, "max": 90, "default": 55,
+            "label": "Flight budget share", "suffix": "%", "financial": True,
+            "note": "The most of the total budget a flight may take before the "
+                    "hotel has nothing left to work with. Raise it and the "
+                    "itinerary flies better and sleeps worse.",
+        },
+        "hotel_share_pct": {
+            "kind": "int", "min": 10, "max": 95, "default": 75,
+            "label": "Stay budget share", "suffix": "%", "financial": True,
+            "note": "Of whatever remains after the flight, the share the stay "
+                    "may take. The rest is what meals are chosen within.",
+        },
+        "rating_prior": {
+            "kind": "int", "min": 0, "max": 500, "default": 150,
+            "label": "Review evidence needed",
+            "note": "How many reviews a hotel needs before its rating is "
+                    "believed on its own. Below this the score is pulled "
+                    "toward the city average. Set it to 0 to trust raw "
+                    "ratings — which hands a stay to a dormitory scoring 4.8 "
+                    "from four reviews.",
+        },
+        "nearby_km": {
+            "kind": "int", "min": 1, "max": 30, "default": 8,
+            "label": "Meals within", "suffix": " km",
+            "note": "How far a restaurant may be from the hotel and still "
+                    "count as part of that day. Widen it and more meals get "
+                    "placed, further away.",
+        },
+        "meals_per_day": {
+            "kind": "int", "min": 0, "max": 3, "default": 2,
+            "label": "Meals a day",
+            "note": "How many meals the itinerary tries to place per day. "
+                    "Zero plans flight and stay only.",
+        },
+    },
     "ebay": {
         "usd_to_inr": {
             "kind": "int", "min": 1, "max": 200, "default": 83,

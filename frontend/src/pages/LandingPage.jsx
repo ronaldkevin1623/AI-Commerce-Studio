@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState } from "react";import { ROLES, useRole } from "../context/RoleContext";
+
 import { Box, Typography, Stack, Chip } from "@mui/material";
 import { useNavigate } from "react-router-dom";
 import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome";
@@ -12,7 +13,6 @@ import LockOutlinedIcon from "@mui/icons-material/LockOutlined";
 import StorefrontOutlinedIcon from "@mui/icons-material/StorefrontOutlined";
 import PersonOutlineOutlinedIcon from "@mui/icons-material/PersonOutlineOutlined";
 
-import { ROLES, useRole } from "../context/RoleContext";
 import { API_BASE } from "../config";
 
 import heroVideo from "../assets/hero-bg.mp4";
@@ -43,8 +43,8 @@ const ROLE_ICONS = {
 };
 
 export default function LandingPage() {
-  const { setRole } = useRole();
   const navigate = useNavigate();
+  const { setRole } = useRole();
   const [probeCount, setProbeCount] = useState(null);
 
   useEffect(() => {
@@ -173,15 +173,10 @@ export default function LandingPage() {
               type="button"
               onClick={() => enter(option.id)}
               sx={{
-                flex: 1,
-                minWidth: 0,
-                textAlign: "left",
-                cursor: "pointer",
-                p: 1.5,
-                borderRadius: 2,
+                flex: 1, minWidth: 0, textAlign: "left", cursor: "pointer",
+                p: 1.5, borderRadius: 2,
                 border: "1px solid rgba(255,255,255,0.22)",
-                bgcolor: "rgba(0,0,0,0.45)",
-                backdropFilter: "blur(8px)",
+                bgcolor: "rgba(0,0,0,0.45)", backdropFilter: "blur(8px)",
                 color: "#fff",
                 transition: "border-color 160ms, background-color 160ms, transform 160ms",
                 "&:hover": {
@@ -192,9 +187,11 @@ export default function LandingPage() {
               }}
             >
               <Stack direction="row" spacing={1} sx={{ alignItems: "center", mb: 0.5 }}>
-                <Box sx={{ display: "flex", color: "rgba(255,255,255,0.85)" }}>
-                  {ROLE_ICONS[option.id]}
-                </Box>
+                {ROLE_ICONS[option.id] && (
+                  <Box sx={{ display: "flex", color: "rgba(255,255,255,0.85)" }}>
+                    {ROLE_ICONS[option.id]}
+                  </Box>
+                )}
                 <Typography sx={{ fontWeight: 700, fontSize: 13.5, color: "#fff" }}>
                   {option.tagline}
                 </Typography>

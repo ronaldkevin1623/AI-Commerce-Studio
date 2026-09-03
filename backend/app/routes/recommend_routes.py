@@ -100,6 +100,35 @@ def _search_history() -> list[dict]:
                 continue
         except Exception:
             continue
+        # A TRIP REQUEST IS NOT A PRODUCT SEARCH.
+        #
+        # "3 days 2 nights Chennai to Mumbai under 10000" reached this list
+        # and was sent to eBay as a product query. It returns nothing
+        # useful, it costs a live marketplace call on the slowest path in
+        # the app, and it would put travel junk in a row about things the
+        # person buys. The sector classifier already knows the difference,
+        # so it is asked rather than a second heuristic being invented.
+        # The SCORES are used, not the verdict, and the bar is deliberately
+        # lower than the one routing uses.
+        #
+        # "3 days 2 nights Chennai to Mumbai under 10000" scores trip 0.43
+        # against products 0.42 — too close for the router to commit, so it
+        # returns no sector and asks. That caution is right when the answer
+        # decides what the agent DOES. Here it only decides whether one past
+        # phrase gets a marketplace lookup, and the two mistakes are not
+        # symmetric: wrongly dropping a term costs one row of a suggestion
+        # strip, wrongly keeping one costs a live eBay call on the slowest
+        # path in the app and puts travel text in a row about shopping.
+        try:
+            from app.sectors import registry as sector_registry
+            sector_registry.bootstrap()
+            scores = sector_registry.classify(query).get("scores") or {}
+            trip_score = float(scores.get("trip") or 0)
+            if trip_score >= 0.35 and trip_score >= float(scores.get("products") or 0):
+                continue
+        except Exception:
+            pass
+
         seen.add(key)
         out.append({"text": query, "weight": 1.0,
                     "label": f"your search for “{query[:32]}”"})
@@ -142,10 +171,22 @@ def _listings_for(term: str) -> list[dict]:
 
 @router.get("")
 def recommendations(limit: int = MAX_CARDS, customer_id: str = ""):
+    # A READ THAT FAILED IS NOT AN EMPTY HISTORY.
+    #
+    # These two were indistinguishable in the response: a quota-exhausted
+    # Firestore produced 0 orders, 0 searches, and a note reading "Nothing
+    # to personalise from yet — no real orders and no searches." That is a
+    # false statement about the person's account, made confidently, on a
+    # screen whose whole job is to reflect what they actually did.
+    #
+    # So the failure is carried out of here instead of only being printed
+    # to a server log nobody is reading.
+    datastore_error = ""
     orders = []
     try:
         orders = list_orders(limit=120)
     except Exception as exc:
+        datastore_error = str(exc)
         print(f"[recommend] could not read orders: {exc}", flush=True)
 
     paid = [o for o in orders if o.get("status") in PAID]
@@ -170,7 +211,12 @@ def recommendations(limit: int = MAX_CARDS, customer_id: str = ""):
     except Exception as exc:
         print(f"[recommend] consumption model unavailable: {exc}", flush=True)
 
-    history = _search_history()
+    try:
+        history = _search_history()
+    except Exception as exc:
+        history = []
+        datastore_error = datastore_error or str(exc)
+        print(f"[recommend] could not read search history: {exc}", flush=True)
     for order in real[:20]:
         for item in (order.get("items") or []):
             if item.get("name"):
@@ -275,7 +321,15 @@ def recommendations(limit: int = MAX_CARDS, customer_id: str = ""):
             "looked_up_live": looked_up,
             "price_band_paise": profile.get("median_paise"),
         },
+        # Named separately from `note` so the UI can tell "we could not
+        # look" apart from "there is nothing there", and say so.
+        "datastore_unavailable": bool(datastore_error),
         "note": (
+            "Your orders and searches could not be read, so there is nothing "
+            "to rank — this is not an empty history. The project's Firestore "
+            "is on the free tier and has hit its daily read quota; it resets "
+            "at midnight US/Pacific. Nothing is broken and nothing was charged."
+            if datastore_error else
             f"Ranked against {len(real)} real orders and {len(history)} things "
             f"you searched for or bought"
             + (f", topped up with live listings for {', '.join(looked_up)}"

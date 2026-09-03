@@ -1,11 +1,26 @@
+import os
 import time
 import firebase_admin
 from firebase_admin import credentials, firestore
 from app.config import FIREBASE_CREDENTIALS_PATH
+from app.datastore_guard import resolve_binding
+
+# DECIDED, AND REFUSED IF AMBIGUOUS, BEFORE THE CLIENT EXISTS.
+#
+# Order matters and is the whole design: app.config has just run
+# load_dotenv(), and the line below is the last moment at which the
+# datastore can still be chosen — firestore.client() reads
+# FIRESTORE_EMULATOR_HOST when it is constructed and never again. Anything
+# ambiguous exits the process here rather than serving the wrong store.
+STORE_BINDING = resolve_binding()
 
 cred = credentials.Certificate(FIREBASE_CREDENTIALS_PATH)
 firebase_admin.initialize_app(cred)
 db = firestore.client()
+
+def store_binding() -> str:
+    """The datastore this process writes to. Fixed for its lifetime."""
+    return STORE_BINDING
 
 
 def log_decision(action_type: str, amount_paise: int, decision: str,
@@ -63,8 +78,22 @@ def save_order(order_id: str, razorpay_order_id: str, amount_paise: int,
         "product_name": product_name,
         "customer_id": customer_id,
         "status": status,
+        # Which datastore this row was written to. Lets a later reader tell
+        # "this order was created in another store" apart from "this order
+        # does not exist", which are very different problems.
+        "store": STORE_BINDING,
         "created_at": firestore.SERVER_TIMESTAMP,
     }
+
+    # Money is now expected to move against this order. Marked here rather
+    # than at each of the six places that create one, so a seventh cannot
+    # forget to.
+    try:
+        from app import inflight
+        inflight.open_checkout(razorpay_order_id, store=STORE_BINDING,
+                               detail=product_name or "")
+    except Exception as exc:
+        print(f"[inflight] open failed: {exc}", flush=True)
 
     if product:
         payload["items"] = [{
@@ -110,6 +139,16 @@ def update_order_status(razorpay_order_id: str, status: str,
         update["razorpay_payment_id"] = payment_id
         update["paid_at"] = int(time.time())
     orders[0].reference.update(update)
+
+    # Terminal either way. A failed checkout has to clear the marker just
+    # as a captured one does — otherwise every abandoned payment would
+    # block environment switches until its TTL ran out.
+    if status in ("paid", "failed", "refunded", "cancelled"):
+        try:
+            from app import inflight
+            inflight.close_checkout(razorpay_order_id)
+        except Exception as exc:
+            print(f"[inflight] close failed: {exc}", flush=True)
 
 
 def order_by_razorpay_id(razorpay_order_id: str) -> dict | None:
@@ -259,3 +298,77 @@ def log_refund(refund_id: str, order_id: str, amount_paise: int, reason: str):
         "reason": reason,
         "timestamp": firestore.SERVER_TIMESTAMP,
     })
+
+# ── trips ───────────────────────────────────────────────────────────────
+
+def save_trip(trip_id: str, sector_id: str, need: dict, itinerary: dict,
+              razorpay_order_id: str, amount_paise: int,
+              customer_id: str = None, status: str = "payment_pending"):
+    """
+    Persist an itinerary at the moment it becomes payable.
+
+    The itinerary stored here is the one the SERVER assembled, never one the
+    client sent. Assembly is deterministic over the datasets, so the booking
+    route re-runs it and stores that — which means the trip you can open
+    later is the trip that was actually evaluated, not a description of it
+    supplied by the page that wanted to be paid.
+    """
+    db.collection("trips").document(trip_id).set({
+        "trip_id": trip_id,
+        "sector_id": sector_id,
+        "need": need,
+        "itinerary": itinerary,
+        "razorpay_order_id": razorpay_order_id,
+        "amount_paise": amount_paise,
+        "customer_id": customer_id,
+        "status": status,
+        "created_at": firestore.SERVER_TIMESTAMP,
+    })
+    return trip_id
+
+
+def mark_trip_booked(razorpay_order_id: str, payment_id: str) -> str | None:
+    """Move a trip to booked once its stay is actually captured."""
+    rows = db.collection("trips").where(
+        "razorpay_order_id", "==", razorpay_order_id).limit(1).get()
+    if not rows:
+        return None
+    rows[0].reference.update({
+        "status": "booked",
+        "razorpay_payment_id": payment_id,
+        "booked_at": int(time.time()),
+    })
+    return rows[0].id
+
+
+def list_trips(limit: int = 40) -> list[dict]:
+    """Newest first. Ordering is explicit because 'recent' is a claim."""
+    rows = (db.collection("trips")
+            .order_by("created_at", direction=firestore.Query.DESCENDING)
+            .limit(limit).stream())
+    return [r.to_dict() for r in rows]
+
+
+def get_trip(trip_id: str) -> dict | None:
+    doc = db.collection("trips").document(trip_id).get()
+    return doc.to_dict() if doc.exists else None
+
+
+def record_for_razorpay_order(razorpay_order_id: str) -> tuple[dict | None, str]:
+    """
+    Find whatever this app stored behind a Razorpay order, wherever it lives.
+
+    Product purchases land in `orders`; a trip's stay lands in `trips`. A
+    split check that only looked at `orders` flagged every genuine trip
+    capture as an order with no local record — which is worse than no check,
+    because a guard that cries wolf on normal traffic is one people learn to
+    ignore.
+    """
+    row = order_by_razorpay_id(razorpay_order_id)
+    if row:
+        return row, "order"
+    rows = db.collection("trips").where(
+        "razorpay_order_id", "==", razorpay_order_id).limit(1).get()
+    if rows:
+        return rows[0].to_dict(), "trip"
+    return None, ""
