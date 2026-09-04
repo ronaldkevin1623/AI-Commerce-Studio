@@ -48,6 +48,23 @@ _BUDGET_PATTERNS = [
 ]
 _BUDGET_RE = [re.compile(p, re.IGNORECASE) for p in _BUDGET_PATTERNS]
 
+# A NUMBER FOLLOWED BY A UNIT OF TIME IS A DEADLINE, NOT A PRICE.
+#
+# `within` is in the budget list because "within 5000" is a real way to state
+# a ceiling. It is also how everyone states a delivery deadline — "delivered
+# within 3 days" — and that matched, producing a ceiling of THREE RUPEES.
+# Worse, the fail-closed `min()` below then preferred it over the 3000 the
+# person actually typed, so the agent went looking for running shoes under
+# Rs3 and correctly found nothing.
+#
+# The fix is not to loosen the fail-closed rule, which is what stops injected
+# text raising a budget. It is to stop a sentence about time being read as a
+# sentence about money in the first place.
+_TIME_UNIT_RE = re.compile(
+    r"^\s*(?:business\s+)?"
+    r"(?:days?|hours?|hrs?|mins?|minutes?|weeks?|months?|years?|working\s+days?)\b",
+    re.IGNORECASE)
+
 _MULTIPLIER = {"k": 1_000, "thousand": 1_000, "lakh": 100_000}
 
 
@@ -67,12 +84,23 @@ def budget_ceiling_paise(text: str) -> int | None:
     the agent spend less than the person asked, never more. An attacker who
     wants to lower someone's budget has achieved nothing worth having.
 
+    A number followed by a unit of time is skipped: "delivered within 3
+    days" is a deadline, and reading it as Rs3 let the fail-closed minimum
+    above prefer it over the budget the person actually typed.
+
     Returns None when the request names no budget at all, in which case the
     model's default stands — there is nothing to protect.
     """
+    blob = text or ""
     found = []
     for pattern in _BUDGET_RE:
-        for amount, scale in pattern.findall(text or ""):
+        for match in pattern.finditer(blob):
+            amount, scale = match.group(1), match.group(2)
+            # "within 3 days" is a deadline. Reading it as Rs3 and then
+            # letting the fail-closed minimum prefer it over the real budget
+            # is how a correct security rule produced a nonsense ceiling.
+            if _TIME_UNIT_RE.match(blob[match.end():]):
+                continue
             try:
                 value = float(amount.replace(",", ""))
             except ValueError:

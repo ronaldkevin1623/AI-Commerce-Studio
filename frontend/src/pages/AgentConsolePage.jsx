@@ -16,6 +16,7 @@ import TripItinerary from "../components/console/TripItinerary";
 import AbandonRunDialog from "../components/console/AbandonRunDialog";
 import ProductDetailDrawer from "../components/console/ProductDetailDrawer";
 import CheckoutSheet from "../components/console/CheckoutSheet";
+import FailedPurchaseCard from "../components/recovery/FailedPurchaseCard";
 import OrderConfirmation from "../components/console/OrderConfirmation";
 import CartPanel from "../components/console/CartPanel";
 import RecommendationStrip from "../components/console/RecommendationStrip";
@@ -66,6 +67,10 @@ export default function AgentConsolePage() {
   const [drawerProduct, setDrawerProduct] = useState(null);
   const [drawerAlternatives, setDrawerAlternatives] = useState([]);
   const [checkoutOpen, setCheckoutOpen] = useState(false);
+  // The last real payment failure, as the server recorded it. Held so the
+  // console can show what stopped the agent from retrying, rather than a
+  // bare "payment failed".
+  const [lastFailure, setLastFailure] = useState(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [deliveryLocation, setDeliveryLocation] = useState(null);
   const [paymentRef, setPaymentRef] = useState(null);
@@ -272,7 +277,7 @@ export default function AgentConsolePage() {
 
   // Extracted so both the automatic open and the "Retry payment"
   // button reuse exactly the same real Razorpay checkout flow.
-  const openCheckout = useCallback((order) => {
+  const openCheckout = useCallback(async (order) => {
     if (!order) return;
     setPaymentStatus(null);
 
@@ -304,7 +309,47 @@ export default function AgentConsolePage() {
       theme: { color: "#ECECEE" },
     };
 
-    new window.Razorpay(options).open();
+    const rzp = new window.Razorpay(options);
+
+    // RAZORPAY'S OWN FAILURE EVENT.
+    //
+    // A card rejected inside the checkout modal never reaches `handler`, so
+    // until this existed the server never heard about it at all — the most
+    // common failure on this account was the one nothing recorded. The
+    // payload is Razorpay's, passed through unedited, and it carries the
+    // product so the purchase can be picked up again on Failure recovery
+    // rather than just disappearing.
+    rzp.on("payment.failed", async (event) => {
+      const error = event?.error ?? {};
+      const item = purchasedProduct ?? {};
+      try {
+        const res = await fetch(`${API_BASE}/payment-failure`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            razorpay_order_id: order.razorpay_order_id,
+            amount_paise: order.amount_paise,
+            customer_id: order.customer_id,
+            product: {
+              id: item.id, name: order.product_name ?? item.name,
+              image: item.image, price_paise: order.amount_paise,
+              source: item.source, url: item.url,
+            },
+            error: {
+              code: error.code, description: error.description,
+              reason: error.reason, step: error.step, source: error.source,
+            },
+          }),
+        });
+        if (res.ok) setLastFailure(await res.json());
+      } catch {
+        // The failure still happened; losing the record of it is bad but
+        // must not also break the screen.
+      }
+      setPaymentStatus("failed");
+    });
+
+    rzp.open();
   }, []);
 
   // Re-pick after a failed payment: the agent's socket is closed, so a
@@ -384,6 +429,29 @@ export default function AgentConsolePage() {
       )}
 
       <Box sx={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0 }}>
+        {/* THE STOP, WHERE THE PERSON IS.
+            A refusal that only shows up on another page is a refusal nobody
+            sees. This sits at the top of the console until it is acted on,
+            because "the agent stopped and is waiting for you" is the most
+            important thing on the screen while it is true. */}
+        {lastFailure && (
+          <Box sx={{ px: 3, pt: 3 }}>
+            <Box sx={{ maxWidth: COLUMN, mx: "auto" }}>
+              <FailedPurchaseCard
+                purchase={lastFailure}
+                onChoose={(key) => {
+                  setLastFailure(null);
+                  setPaymentStatus(null);
+                  // "Try again" is a FRESH attempt, not a retry of the one
+                  // that failed — it re-enters the same gated path from the
+                  // top. The agent still cannot do this on its own.
+                  if (key === "retry" && orderInfo) openCheckout(orderInfo);
+                }}
+              />
+            </Box>
+          </Box>
+        )}
+
         {/* Empty state: greeting and composer centred in the viewport,
             so a fresh session feels like an invitation rather than a
             blank page with a toolbar stuck to the bottom. */}

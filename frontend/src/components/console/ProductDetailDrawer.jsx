@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import CrossSellOffer from "./CrossSellOffer";
 import { useNavigate } from "react-router-dom";
 import { Box, Button, Drawer, Stack, Typography } from "@mui/material";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
@@ -461,6 +462,11 @@ export default function ProductDetailDrawer({
             {loading ? "Checking price…" : `Buy now · ${inr(merged.price_paise)}`}
           </Button>
         </Stack>
+
+        {/* The merchant's approved cross-sell, if there is one against this
+            product. Below the buy buttons rather than above them: it is an
+            addition to the decision, not a step in front of it. */}
+        <CrossSellOffer productId={merged.id} source={merged.source} />
         {/* Hands this listing to the red team page, which audits it there.
             The listing travels in sessionStorage rather than in the URL: it
             is a whole record, and a query string long enough to hold it

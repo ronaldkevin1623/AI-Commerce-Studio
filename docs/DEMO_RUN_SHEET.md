@@ -32,8 +32,9 @@ that already exist prove the same point.
 **Reset between rehearsals:** Ctrl+C the emulator window — *not* the X, or
 the save is skipped — then `start-emulator.cmd` again.
 
-**State it starts in:** growth agents **off**, 3 proposals waiting, 1
-campaign, 1 abandoned checkout, 1 approval pending, 8 products.
+**State it starts in:** growth agents **off**, 4 proposals waiting, 1
+campaign, 1 abandoned checkout, 1 approval pending, 8 products, 0 live
+offers, an empty recovery queue.
 
 ---
 
@@ -152,7 +153,59 @@ dataset alone:
 
 ## 2:50 — 3:50 · The merchant side — the same bar, opposite pocket
 
-Switch the toggle to **Merchant** → **Growth**.
+Switch the toggle to **Merchant**. **Home changes agent.**
+
+> "Both sides of this get an agent. The buyer's turns a sentence into a
+> transaction. The merchant's turns a sentence into an analysis of their own
+> shop. Same app, opposite ends of the counter."
+
+The heading now reads **"Welcome back — what should I look into?"**. Click
+the first chip, or type it:
+
+```
+Find me an opportunity to increase revenue
+```
+
+**The answer is the beat.** It opens with what it ran — *"I ran 4 proposals
+from five growth agents against this store's own orders"* — then leads with a
+refusal rather than an opportunity:
+
+> *"No two products have ever been bought together here. Across 39 order
+> records, not one contains two of this store's products. That rules out the
+> obvious revenue play — a cross-sell learned from real baskets — because
+> there are no real baskets to learn from."*
+
+then finds the cheaper win anyway:
+
+> *"Orders are being created and not paid. 5 of 8 orders in this window were
+> never paid. Recovering an order that already exists is cheaper than
+> creating a new one."*
+
+then lists **what it would do** — each action priced, tagged with its agent
+and its observation count, and carrying the gate's own verdict — and closes
+with a block headed **What I could not determine**:
+
+> *"No expected-return figure is attached to any of these. This shop has no
+> conversion history to project from, so a number like 'expected +₹42,000'
+> would be arithmetic on an assumption."*
+
+**The sentence to say:**
+
+> "Every number in that answer is computed. Nothing is phrased by a language
+> model — deliberately. Ask an LLM to summarise a growth report and it will
+> tell you 'customers who buy X have a 38% chance of buying Y' whether or not
+> anything supports it, because that is what the training data looks like. On
+> this shop that number would be invented, and it would be the most
+> persuasive thing on the screen."
+
+*Also worth one line if asked:* it answers six kinds of question — revenue,
+performance, problems, products, customers, and what it can do unattended —
+and says so plainly when it does not understand rather than improvising.
+
+Then **Growth** in the sidebar. It is a **section**, not a page: it opens to
+**Agents · Campaigns · Attribution · Relationships**, and the Overview
+carries three cards with one number each, so you can see what is waiting
+before opening anything. Go to **Agents**.
 
 Everything reads **Blocked — growth agents are switched off**. Flip the
 switch and re-scan. Now:
@@ -181,6 +234,76 @@ Two details worth pointing at:
 - **cross-sell labels its basis** — *"both filed under home office — no
   order has contained them together"*. Adjacency is not evidence.
 
+**Five agents are registered, not three.** Further down the queue is
+**reactivation** — *"10% off the next order for a customer silent 1.5 days"*
+— and, when the data supports one, **bundles**. Both spend margin, so both
+land on the same gate.
+
+The reactivation one is worth reading aloud, because it argues against
+itself: *"Their orders sit about 0.0 hours apart, which is too close
+together to read as a rhythm — so the 24-hour floor decided this, not their
+own pattern. Weaker evidence than it looks."*
+
+> "Lapsed is not a fixed 90 days. It is computed against that customer's own
+> median gap between orders, because a fixed rule on a shop this young finds
+> nobody. And a customer with one order is counted separately and never
+> proposed against — one purchase is not a rhythm that can be broken."
+
+Then **Attribution** and **Relationships** in the sidebar, which are the
+closing half of the loop:
+
+**Attribution.** Margin given away sits beside revenue earned, at the same
+size.
+
+> "Every dashboard like this shows the revenue large and the cost in a
+> footnote, and the number reads as profit. This counts only orders an
+> action is actually attached to — the offer went on *that* cart and *that*
+> cart paid — and it prints no conversion rate at any sample size."
+
+**Relationships.** The graph the cross-sell and bundle agents reason over,
+drawn so the basis can be checked rather than trusted.
+
+> "Solid green means bought in the same order. Dashed grey means only filed
+> under the same category. Right now every edge on this store is dashed, and
+> the graph says so itself rather than letting you assume otherwise."
+
+*Cut if short:* Relationships; Attribution carries the argument.
+
+## The closed loop — if you have 45 seconds spare
+
+The one beat that shows both agents in the same sentence. On **Agents**,
+flip the switch on and click **Approve and apply** on a cross-sell.
+
+Then switch to **Customer**, open the anchor product from the
+recommendation row, and scroll the drawer:
+
+```
+FROM THE MERCHANT
+    Bamboo Monitor Stand with drawer          ₹1,290    [ Add ]
+
+    Bamboo Monitor Stand with drawer (₹1,290) is filed alongside this
+    one. Nobody has bought the two together yet — this is the shop's
+    suggestion, not a pattern.
+
+    Shown because the merchant approved a cross-sell for this product.
+    It changes no price. Offer go-…, approved by merchant.
+```
+
+> "That is the merchant's agent and the buyer's agent meeting. The merchant
+> approved it thirty seconds ago and it is on the buyer's screen now,
+> carrying the offer id so the audit trail can be read back to the approval."
+
+**The line that matters most is the second paragraph.** A retail cross-sell
+would say *"frequently bought together"* here. Nobody has bought these two
+together, so it says that instead — the wording is chosen by the server
+from the evidence, not by the component.
+
+And when one converts, **only the recommended line is counted**: a shopper
+who was buying a ₹1,490 lamp anyway and added a ₹1,290 stand generated
+₹1,290 of agent revenue, not ₹2,780. Counting the basket is how every
+cross-sell ends up looking transformative.
+
+
 Click **Approve and apply** on the escalated one → *"Applied — offer go-…"*.
 
 Then scroll to **Campaigns**: a goal, an envelope, a window. **Tick.**
@@ -206,6 +329,23 @@ Then, without leaving the page:
 > which is the test of whether the first one had leaked into it. A draft
 > product is refused with a 409 either way."
 
+Then open `/merchant/catalog/cds-desk-lamp` in a tab if there is time:
+
+> "A price and a name are enough for a person looking at a page and nowhere
+> near enough for an agent buying on someone's behalf. Availability and
+> inventory are separate fields, delivery and returns are marked
+> `declared_by: merchant` because a returns window is a promise rather than
+> a measurement, and `requires_user_approval` answers *'above the buyer's
+> own spending bound'* — because a shop does not get to decide when somebody
+> else's agent needs a person."
+
+And `/transaction-policy` beside it:
+
+> "Every bound the buying agent is under, in one document, read live from
+> the same settings the gate reads — and each line names the module that
+> enforces it. `auto_retry_payment: false` is in there because no code path
+> retries a charge, not because a flag is switched off."
+
 If asked about the rest — the answers are in `docs/PROTOCOLS.md`:
 
 - **AP2** — implemented, ES256 mandate chain, 1,800-second expiry
@@ -217,6 +357,67 @@ If asked about the rest — the answers are in `docs/PROTOCOLS.md`:
 *Cut if short:* everything after the Storefront line.
 
 ## 4:25 — 5:00 · Why you can believe any of it
+
+### The failure — real, not simulated
+
+The brief asks for one failure handled gracefully, and this account provides
+one on request: **cards are rejected here, every time.** So buy anything and
+pay by **card**. Razorpay refuses it for real.
+
+Then open **Failure recovery**. The item is waiting there:
+
+```
+⚠ Payment could not be completed                      BAD_REQUEST_ERROR
+
+ [img]  Braided USB-C Cable, 2 metre
+        ₹649   order_demo_card
+
+ Your payment could not be completed as this business accepts domestic
+ (Indian) card payments only. Try another payment method. Netbanking is
+ the only rail with a capture behind it here. (failed at: payment_authentication)
+
+     A failed payment is never retried automatically…
+     Enforced by: absence — no retry exists to disable
+
+ [ Try again ]  [ Change payment method ]  [ Cancel ]
+```
+
+**The three sentences to say:**
+
+> "A card rejected inside Razorpay's own modal never reaches the success
+> handler, so the most common failure on this account used to be the one
+> nothing recorded. It subscribes to Razorpay's `payment.failed` event now,
+> and the record keeps the product — because 'your payment failed' is not
+> actionable and 'your payment for the USB-C cable failed because this
+> account rejects foreign cards' is."
+
+> "That reason is Razorpay's own words, quoted. This page and the Razorpay
+> dashboard cannot end up describing the same failure differently."
+
+> "And it did not retry. Three retries against a card that will never work is
+> three attempts on somebody's account — it stopped, named the bound, and
+> handed the decision back."
+
+Then **Try again**, and scroll to **Can it succeed at all**:
+
+```
+Payment rails on this account                   from 13 real payments
+  ⊖ UPI          UNTRIED     never attempted on this account
+  ⊘ Card         REJECTED    4 attempts, none captured — "this business
+                             accepts domestic (Indian) card payments only"
+  ✓ Netbanking   WORKS  ⚠ needs a person      9 payments captured
+  ⊖ Wallet       UNTRIED     never attempted on this account
+```
+
+> "Every verdict is read from what this account has actually done — a rail is
+> 'works' only if money has been captured on it, never because somebody wrote
+> it in a list. It resolved to netbanking and then stopped, because netbanking
+> puts a person on the bank's page."
+
+**Do not say "the agent retries until it succeeds."** It resolves, and hands
+over where a person is genuinely required. Knowing which door is locked
+before pulling the handle is most of what separates an agent from a retry
+loop.
 
 **Audit trail** — every financial action including the refusals, live:
 `growth_refused`, `growth_applied`, `campaign_opened`, `order_missing_locally`.
@@ -232,7 +433,7 @@ Razorpay order, so only click it if you mean to.
 
 Close on the honesty:
 
-> "597 assertions pass across 25 suites. Two fail, deliberately: the money
+> "617 assertions pass across 25 suites. Two fail, deliberately: the money
 > reconciliation compares what this app recorded against what Razorpay
 > actually holds, and it is currently reporting a real mismatch I have not
 > hidden. That check is the reason I trust the rest."

@@ -4,6 +4,8 @@ from fastapi.responses import JSONResponse
 from google.api_core.exceptions import GoogleAPICallError, ResourceExhausted
 
 from app.routes import (
+    recovery_routes,
+    policy_routes,
     agent_routes,
     webhook_routes,
     refund_routes,
@@ -95,6 +97,8 @@ app.include_router(sector_routes.router)
 app.include_router(growth_agent_routes.router)
 app.include_router(x402_routes.router)
 app.include_router(acp_routes.router)
+app.include_router(policy_routes.router)
+app.include_router(recovery_routes.router)
 
 
 @app.get("/health")

@@ -58,6 +58,27 @@ class CrossSellAgent:
 
         return [{"pairs": pairs, "products": products}]
 
+    def _already_live(self, anchor_id: str, complement_id: str) -> bool:
+        """
+        ONE LIVE OFFER PER PAIR.
+
+        Without this the scan re-proposes a pair every time it runs, and each
+        approval writes another offer for the same two products — three live
+        offers for one desk lamp, which is what a merchant would then see
+        surfaced to buyers. Cart recovery already had this guard for carts;
+        the same mistake was available here and nobody had made it yet.
+        """
+        try:
+            from app.growth import registry
+            for offer in registry.offers_for(anchor_id):
+                if (offer.get("params") or {}).get("complement_id") == complement_id:
+                    return True
+        except Exception:
+            # A guard that cannot read the datastore should not block the
+            # proposal; the gate is still ahead of it.
+            pass
+        return False
+
     def propose(self, signals: list[dict]) -> list[Proposal]:
         if not signals:
             return []
@@ -67,6 +88,8 @@ class CrossSellAgent:
 
         # 1. Real co-purchase, where it exists.
         for (a, b), count in pairs.most_common(3):
+            if self._already_live(a, b):
+                continue
             proposals.append(self._pair_proposal(
                 products[a], products[b], count,
                 basis="bought together in this store's own orders"))
@@ -80,6 +103,8 @@ class CrossSellAgent:
                 if len(group) < 2 or not category:
                     continue
                 anchor, complement = group[0], group[1]
+                if self._already_live(anchor["id"], complement["id"]):
+                    continue
                 proposals.append(self._pair_proposal(
                     anchor, complement, 0,
                     basis=f"both filed under “{category}” — no order has "

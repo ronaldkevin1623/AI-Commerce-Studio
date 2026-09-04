@@ -1,72 +1,109 @@
-import { useEffect, useState } from "react";
-import { Box, Stack, Typography } from "@mui/material";
-
-import PageBanner from "../components/shared/PageBanner";
-import LoadingState from "../components/shared/LoadingState";
-import ChartCard from "../components/growth/ChartCard";
-import { BarChart, HBarChart, Legend, SERIES } from "../components/growth/charts";
+import { useCallback, useEffect, useState } from "react";
+import { Box, Chip, CircularProgress, Stack, Tooltip, Typography } from "@mui/material";
+import BarChartOutlinedIcon from "@mui/icons-material/BarChartOutlined";
+import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
 
 import { API_BASE } from "../config";
-
-const rupees = (paise) => `₹${Math.round((paise ?? 0) / 100).toLocaleString("en-IN")}`;
-
-const NOTE_TONE = {
-  blocked: { color: "#EF4444", bg: "rgba(239,68,68,0.07)", border: "rgba(239,68,68,0.25)" },
-  warn: { color: "#F59E0B", bg: "rgba(245,158,11,0.07)", border: "rgba(245,158,11,0.25)" },
-  thin: { color: "#9AA3B2", bg: "rgba(255,255,255,0.03)", border: "rgba(255,255,255,0.10)" },
-  ok: { color: "#22C55E", bg: "rgba(34,197,94,0.06)", border: "rgba(34,197,94,0.20)" },
-};
+import DateRangePicker from "../components/growth/DateRangePicker";
+import {
+  BarList, CARD, Card, CohortGrid, Delta, LineChart, MetricLabel, inr, inrShort,
+} from "../components/analytics/parts";
 
 /**
- * A headline number. Proportional figures, not tabular — equal-width digits
- * make a large standalone number look loose.
+ * ANALYTICS.
+ *
+ * Built to the shape of the reference admin's analytics page — a range
+ * control, a comparison period, a row of headline tiles, then cards — but
+ * with roughly a third of its cards, and that reduction is the design
+ * decision rather than a shortcut.
+ *
+ * The cards that are gone are the WEB TRAFFIC ones: sessions over time,
+ * conversion rate, sessions by landing page, by social referrer, by
+ * referring channel. This shop has no theme, no visitors and no referrers,
+ * so every one of those resolves to "No data for this date range" forever.
+ * A page that is two-thirds empty teaches a merchant to stop reading it,
+ * and a page that fills those cards with invented numbers is worse. They
+ * are absent, and the page says so once, plainly, at the bottom.
+ *
+ * Cohort retention IS here, because it needs customers and orders rather
+ * than sessions, and this shop has both. It is the one card on the page
+ * whose sample is small enough to mislead, so it prints its cohort sizes.
+ *
+ * What is here is everything the shop's own records can answer, each with a
+ * comparison against the preceding window of equal length — because a
+ * number without a comparison is not yet information.
  */
-function StatTile({ label, value, sub, tone }) {
-  return (
-    <Box
-      sx={{
-        p: 2,
-        borderRadius: 2.5,
-        bgcolor: "background.paper",
-        border: "1px solid",
-        borderColor: "divider",
-        // A tinted rule where the number carries a verdict, nothing where it
-        // is just a count — so the eye lands on the one that matters.
-        borderTop: "2px solid",
-        borderTopColor: tone ?? "divider",
-      }}
-    >
-      <Typography variant="caption" sx={{ color: "text.secondary", display: "block", mb: 0.75 }}>
-        {label}
-      </Typography>
-      <Typography
-        sx={{
-          fontSize: 26,
-          fontWeight: 700,
-          lineHeight: 1.1,
-          letterSpacing: "-0.015em",
-          fontVariantNumeric: "tabular-nums",
-          color: tone ?? "text.primary",
-        }}
-      >
-        {value}
-      </Typography>
-      <Typography variant="caption" sx={{ color: "text.disabled", display: "block", mt: 0.5 }}>
-        {sub}
-      </Typography>
-    </Box>
-  );
+
+const SHORT_MONTH = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                     "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** `2026-09-03` or `2026-09-03T14` into an axis label. */
+function axisLabel(at, granularity) {
+  if (granularity === "hour") {
+    const hour = Number(at.slice(11, 13));
+    const suffix = hour < 12 ? "AM" : "PM";
+    const twelve = hour % 12 === 0 ? 12 : hour % 12;
+    return `${twelve} ${suffix}`;
+  }
+  const [, month, day] = at.split("-");
+  return `${SHORT_MONTH[Number(month) - 1]} ${Number(day)}`;
 }
 
-function SectionTitle({ children, sub }) {
+/**
+ * The label the hover readout shows: the whole moment, not the axis tick.
+ *
+ * An axis says "Sep 3" because it has to fit six of them across a card. A
+ * tooltip is answering "which point exactly is this", so it spells the
+ * moment out — including the year, because the comparison series is a
+ * different window and on a January range the two rows differ only by it.
+ */
+function fullLabel(at, granularity) {
+  const [year, month, rest] = at.split("-");
+  const day = Number(rest.slice(0, 2));
+  const stamp = `${SHORT_MONTH[Number(month) - 1]} ${day}, ${year}`;
+  if (granularity !== "hour") return stamp;
+  const hour = Number(at.slice(11, 13));
+  const suffix = hour < 12 ? "AM" : "PM";
+  const twelve = hour % 12 === 0 ? 12 : hour % 12;
+  return `${stamp}, ${twelve}:00 ${suffix}`;
+}
+
+/** How a whole window is named under the chart. */
+function windowLabel(window) {
+  if (!window) return null;
+  return window.from === window.to
+    ? fullLabel(window.from, "day")
+    : `${fullLabel(window.from, "day")} – ${fullLabel(window.to, "day")}`;
+}
+
+const toPoints = (series, granularity) =>
+  (series ?? []).map((p) => ({
+    at: p.at,
+    value: p.sales_paise,
+    label: axisLabel(p.at, granularity),
+    full: fullLabel(p.at, granularity),
+  }));
+
+function Kpi({ kpi }) {
+  const value =
+    kpi.unit === "paise" ? inr(kpi.value)
+      : kpi.unit === "percent" ? (kpi.value === null ? "—" : `${kpi.value}%`)
+      : String(kpi.value ?? 0);
+
   return (
-    <Box sx={{ mb: 2, mt: 4 }}>
-      <Typography variant="overline" sx={{ letterSpacing: 1, color: "text.secondary" }}>
-        {children}
-      </Typography>
-      {sub && (
-        <Typography variant="caption" sx={{ color: "text.secondary", display: "block", mt: 0.25 }}>
-          {sub}
+    <Box sx={{ ...CARD, py: 1.75 }}>
+      <MetricLabel>{kpi.label}</MetricLabel>
+      <Stack direction="row" spacing={1.25} sx={{ alignItems: "baseline", mt: 1 }}>
+        <Typography sx={{ fontSize: 22, fontWeight: 700, lineHeight: 1.1,
+                          letterSpacing: "-0.01em" }}>
+          {value}
+        </Typography>
+        <Delta pct={kpi.delta_pct} />
+      </Stack>
+      {kpi.note && (
+        <Typography variant="caption"
+                    sx={{ color: "text.disabled", display: "block", mt: 0.5, fontSize: 11 }}>
+          {kpi.note}
         </Typography>
       )}
     </Box>
@@ -74,335 +111,283 @@ function SectionTitle({ children, sub }) {
 }
 
 export default function MerchantPage() {
-  const [data, setData] = useState(null);
-  const [status, setStatus] = useState("loading");
+  const [range, setRange] = useState(null);
+  const [state, setState] = useState({ status: "loading", data: null, error: null });
 
-  useEffect(() => {
-    let live = true;
-    (async () => {
-      try {
-        const res = await fetch(`${API_BASE}/growth-insights`);
-        if (!res.ok) throw new Error("bad status");
-        const json = await res.json();
-        if (live) {
-          setData(json);
-          setStatus("ready");
-        }
-      } catch {
-        if (live) setStatus("error");
-      }
-    })();
-    return () => {
-      live = false;
-    };
+  const load = useCallback(async (selected) => {
+    setState((s) => ({ ...s, status: "loading" }));
+    const query = !selected || selected.rolling
+      ? `days=${selected?.days ?? 30}`
+      : `start=${selected.startISO}&end=${selected.endISO}`;
+    try {
+      const res = await fetch(`${API_BASE}/merchant/analytics?${query}`);
+      if (!res.ok) throw new Error(`Store returned ${res.status}`);
+      setState({ status: "ready", data: await res.json(), error: null });
+    } catch (err) {
+      setState({ status: "error", data: null, error: String(err.message ?? err) });
+    }
   }, []);
 
-  if (status === "loading") {
-    return (
-      <Box>
-        <PageBanner title="Storefront analytics" subtitle="Loading…" />
-        <Box sx={{ maxWidth: 1000, mx: "auto", px: 3, py: 4 }}>
-          <LoadingState label="Reading Firestore" />
-        </Box>
-      </Box>
-    );
-  }
+  useEffect(() => { load(range); }, [load, range]);
 
-  if (status === "error") {
-    return (
-      <Box>
-        <PageBanner title="Storefront analytics" subtitle="Couldn't load insights" />
-        <Box sx={{ maxWidth: 1000, mx: "auto", px: 3, py: 4 }}>
-          <Typography variant="body2" sx={{ color: "error.main" }}>
-            Couldn't reach /growth-insights. Check that uvicorn is running on port 8000.
-          </Typography>
-        </Box>
-      </Box>
-    );
-  }
+  const { status, data, error } = state;
 
-  const { summary, funnel, daily, block_reasons, abandon_stages, market, notes } = data;
-  const enough = market.enough_data;
-
-  const dailySeries = [
-    { key: "attempts", name: "Purchase attempts" },
-    { key: "abandoned", name: "Abandoned by the person" },
-  ];
+  const grain = data?.window?.granularity ?? "day";
+  const points = toPoints(data?.sales_over_time?.series, grain);
+  const comparePoints = toPoints(data?.sales_over_time?.compare_series, grain);
+  const aovPoints = (data?.sales_over_time?.series ?? []).map((p) => ({
+    at: p.at,
+    value: p.orders ? Math.round(p.sales_paise / p.orders) : 0,
+    label: axisLabel(p.at, grain),
+    full: fullLabel(p.at, grain),
+  }));
 
   return (
-    <Box>
-      <PageBanner
-        title="Storefront analytics"
-        subtitle="Every figure here is computed from decisions, orders and searches already logged in Firestore. Nothing is estimated or projected."
-      />
-
-      <Box sx={{ maxWidth: 1000, mx: "auto", px: 3, py: 4 }}>
-        {/* ── Headline ─────────────────────────────────────────────── */}
-        <Box
-          sx={{
-            display: "grid",
-            gridTemplateColumns: { xs: "1fr 1fr", md: "repeat(4, 1fr)" },
-            gap: 2,
-          }}
-        >
-          <StatTile
-            label="Order value created"
-            value={rupees(summary.order_value_paise)}
-            sub={`${summary.orders} Razorpay orders`}
-          />
-          <StatTile
-            label="Revenue captured"
-            value={rupees(summary.captured_paise)}
-            sub={`${summary.orders_paid} of ${summary.orders} paid`}
-            tone={summary.captured_paise ? "#22C55E" : "#EF4444"}
-          />
-          <StatTile
-            label="Abandonment rate"
-            value={summary.abandonment_rate != null ? `${summary.abandonment_rate}%` : "—"}
-            sub={`${summary.abandoned} runs ended by the person`}
-            tone={summary.abandonment_rate >= 25 ? "#F59E0B" : undefined}
-          />
-          <StatTile
-            label="Listings seen"
-            value={market.listings_seen.toLocaleString("en-IN")}
-            sub={`across ${market.scans} searches`}
-          />
-        </Box>
-
-        {/* ── What the numbers say ─────────────────────────────────── */}
-        <SectionTitle>Read of the data</SectionTitle>
-        <Stack spacing={1.25}>
-          {notes.map((note, i) => {
-            const tone = NOTE_TONE[note.tone] ?? NOTE_TONE.ok;
-            return (
-              <Box
-                key={i}
-                sx={{
-                  p: 1.75,
-                  borderRadius: 2,
-                  bgcolor: tone.bg,
-                  border: "1px solid",
-                  borderColor: tone.border,
-                  borderLeft: "3px solid",
-                  borderLeftColor: tone.border,
-                }}
-              >
-                {note.headline && (
-                  <Typography
-                    variant="body2"
-                    sx={{ fontWeight: 600, fontSize: 13.5, mb: 0.5, color: "text.primary" }}
-                  >
-                    {note.headline}
-                  </Typography>
-                )}
-                <Typography variant="body2" sx={{ color: "text.secondary", lineHeight: 1.65,
-                                                  fontSize: 13 }}>
-                  {note.text}
-                </Typography>
-              </Box>
-            );
-          })}
+    <Box sx={{ p: 3, maxWidth: 1320, mx: "auto" }}>
+      <Stack direction="row"
+             sx={{ alignItems: "center", justifyContent: "space-between", mb: 2, gap: 2 }}>
+        <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+          <BarChartOutlinedIcon sx={{ fontSize: 20, color: "text.secondary" }} />
+          <Typography sx={{ fontSize: 20, fontWeight: 700, letterSpacing: "-0.01em" }}>
+            Analytics
+          </Typography>
         </Stack>
+      </Stack>
 
-        {/* ── Funnel ───────────────────────────────────────────────── */}
-        <SectionTitle sub="Each step counts real logged rows, not a modelled drop-off.">
-          Where runs end up
-        </SectionTitle>
-        <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" }, gap: 2 }}>
-          <ChartCard
-            title="Purchase funnel"
-            columns={["Stage", "Count"]}
-            rows={funnel.map((f) => [f.stage, f.count])}
-          >
-            <HBarChart
-              rows={funnel.map((f) => ({
-                label: f.stage,
-                value: f.count,
-                // The terminal step is a status, not a series: zero captures
-                // is the finding, so it gets the status colour and a label.
-                color: f.stage === "Payments captured" && f.count === 0 ? "#EF4444" : SERIES[0],
-              }))}
-              labelWidth={132}
-            />
-          </ChartCard>
+      {/* ── controls ─────────────────────────────────────────────────── */}
+      <Stack direction="row" spacing={1} sx={{ alignItems: "center", mb: 3, flexWrap: "wrap", gap: 1 }}>
+        <DateRangePicker value={range} onChange={setRange} />
 
-          <ChartCard
-            title="Where people abandoned"
-            columns={["Stage", "Runs"]}
-            rows={abandon_stages.map((a) => [a.stage, a.count])}
-            sample={summary.abandoned}
-          >
-            {abandon_stages.length ? (
-              <HBarChart
-                rows={abandon_stages.map((a) => ({ label: a.stage, value: a.count }))}
-                labelWidth={132}
-              />
-            ) : (
-              <Typography variant="caption" color="text.secondary">
-                No abandonments logged yet.
-              </Typography>
-            )}
-          </ChartCard>
-        </Box>
-
-        {block_reasons.length > 0 && (
-          <Box sx={{ mt: 2 }}>
-            <ChartCard
-              title="Why the gate blocked a purchase"
-              columns={["Reason", "Count"]}
-              rows={block_reasons.map((b) => [b.reason, b.count])}
-              sample={summary.blocked}
-            >
-              <HBarChart
-                rows={block_reasons.map((b) => ({ label: b.reason, value: b.count, color: "#EF4444" }))}
-                labelWidth={280}
-              />
-            </ChartCard>
-          </Box>
-        )}
-
-        {/* ── Activity ─────────────────────────────────────────────── */}
-        <SectionTitle sub="Configuration changes are logged separately and excluded — tuning the hive isn't commerce.">
-          Activity by day
-        </SectionTitle>
-        <ChartCard
-          title="Purchase attempts and abandonments"
-          columns={["Day", "Attempts", "Abandoned", "Orders"]}
-          rows={daily.map((d) => [d.day, d.attempts, d.abandoned, d.orders])}
-        >
-          <Legend series={dailySeries} />
-          <BarChart
-            data={daily.map((d) => ({
-              label: d.day.slice(5),
-              attempts: d.attempts,
-              abandoned: d.abandoned,
-            }))}
-            series={dailySeries}
+        {/* The comparison period is stated, not chosen. It is always the
+            window immediately before this one, of equal length — offering a
+            choice would imply the others are supported, and "the same days
+            last month" is a different number of weekends and therefore not
+            a comparison at all. */}
+        <Tooltip title="Always the window immediately before this one, of equal length.">
+          <Chip
+            size="small"
+            icon={<InfoOutlinedIcon sx={{ fontSize: 14 }} />}
+            label={data ? `vs ${data.compare.from} – ${data.compare.to}` : "vs previous period"}
+            sx={{ height: 30, borderRadius: 1.5, fontSize: 12.5,
+                  bgcolor: "transparent", border: "1px solid", borderColor: "divider" }}
           />
-        </ChartCard>
+        </Tooltip>
 
-        {/* ── Market ───────────────────────────────────────────────── */}
-        <SectionTitle
-          sub={
-            enough
-              ? `Real eBay listings AI Commerce Studio has actually seen — the whole result set of every search, not just the item bought.`
-              : `Needs at least ${data.min_sample} observed listings.`
-          }
-        >
-          Prices and discounts in the market
-        </SectionTitle>
+        <Chip
+          size="small"
+          label="INR ₹"
+          sx={{ height: 30, borderRadius: 1.5, fontSize: 12.5,
+                bgcolor: "transparent", border: "1px solid", borderColor: "divider" }}
+        />
 
-        {enough ? (
-          <>
-            <Box
-              sx={{
-                display: "grid",
-                gridTemplateColumns: { xs: "1fr 1fr", md: "repeat(4, 1fr)" },
-                gap: 2,
-                mb: 2,
-              }}
-            >
-              <StatTile
-                label="Median asking price"
-                value={rupees(market.price_paise.median)}
-                sub={`${rupees(market.price_paise.p25)} – ${rupees(market.price_paise.p75)} middle half`}
-              />
-              <StatTile
-                label="Listings discounted"
-                value={`${market.discounted_share}%`}
-                sub={`${market.discount_sample} of ${market.listings_seen}`}
-              />
-              <StatTile
-                label="Median discount"
-                value={
-                  market.discount_percentiles.median != null
-                    ? `${market.discount_percentiles.median}%`
-                    : "—"
-                }
-                sub={`up to ${market.discount_percentiles.max}% off`}
-              />
-              <StatTile
-                label="Flagged by Trust"
-                value={`${market.flagged_share}%`}
-                sub="price outliers and weak sellers"
-              />
-            </Box>
-
-            <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" }, gap: 2 }}>
-              <ChartCard
-                title="Asking price spread"
-                hint="Every listing seen, bucketed by price."
-                sample={market.sample}
-                columns={["Price band (₹)", "Listings"]}
-                rows={market.price_buckets.map((b) => [b.label, b.count])}
-              >
-                <BarChart
-                  data={market.price_buckets.map((b) => ({ label: b.label, count: b.count }))}
-                  series={[{ key: "count", name: "Listings" }]}
-                  height={170}
-                />
-              </ChartCard>
-
-              <ChartCard
-                title="Discount depth"
-                hint="Only listings eBay reports a discount on."
-                sample={market.discount_sample}
-                columns={["Discount (%)", "Listings"]}
-                rows={market.discount_buckets.map((b) => [b.label, b.count])}
-              >
-                <BarChart
-                  data={market.discount_buckets.map((b) => ({ label: b.label, count: b.count }))}
-                  series={[{ key: "count", name: "Listings" }]}
-                  height={170}
-                />
-              </ChartCard>
-            </Box>
-
-            <Box sx={{ mt: 2 }}>
-              <ChartCard
-                title="Discounted listings by search"
-                hint="How often each category actually carries a deal."
-                columns={["Search", "Listings", "Discounted", "Median price"]}
-                rows={market.by_query.map((q) => [
-                  q.query,
-                  q.listings,
-                  q.discounted,
-                  rupees(q.median_price_paise),
-                ])}
-              >
-                <HBarChart
-                  rows={market.by_query.map((q) => ({
-                    label: q.query,
-                    value: q.discounted,
-                  }))}
-                  labelWidth={168}
-                />
-              </ChartCard>
-            </Box>
-          </>
-        ) : (
-          <Box
-            sx={{
-              bgcolor: "background.paper",
-              border: "1px dashed",
-              borderColor: "divider",
-              borderRadius: 2.5,
-              p: 3,
-              textAlign: "center",
-            }}
-          >
-            <Typography variant="body2" sx={{ color: "text.secondary" }}>
-              Only {market.sample} listings observed so far. Run a few searches from the console —
-              every search records its whole result set, so these charts fill in quickly.
-            </Typography>
-          </Box>
+        {data && (
+          <Typography variant="caption" sx={{ color: "text.disabled", ml: 0.5 }}>
+            {data.window.from} to {data.window.to} · by {data.window.granularity}
+          </Typography>
         )}
+      </Stack>
 
-        <Typography variant="caption" sx={{ color: "text.secondary", display: "block", mt: 4 }}>
-          Chart colours were validated for colour-vision deficiency against this surface. Every
-          chart has a table view, and no value on this page is encoded by colour alone.
-        </Typography>
-      </Box>
+      {status === "loading" && (
+        <Stack sx={{ alignItems: "center", py: 10 }}><CircularProgress size={24} /></Stack>
+      )}
+
+      {status === "error" && (
+        <Box sx={{ ...CARD, borderColor: "error.main", bgcolor: "rgba(239,68,68,0.08)" }}>
+          <Typography variant="body2" sx={{ color: "error.main", fontWeight: 600, mb: 0.5 }}>
+            Couldn't read analytics
+          </Typography>
+          <Typography variant="caption" sx={{ color: "text.secondary" }}>{error}</Typography>
+        </Box>
+      )}
+
+      {status === "ready" && (
+        <Stack spacing={2}>
+          {/* ── headline tiles ───────────────────────────────────────── */}
+          <Box sx={{ display: "grid", gap: 2,
+                     gridTemplateColumns: { xs: "1fr 1fr", md: "repeat(4, 1fr)" } }}>
+            {data.kpis.map((kpi) => <Kpi key={kpi.key} kpi={kpi} />)}
+          </Box>
+
+          {/* ── sales over time + the breakdown ──────────────────────── */}
+          <Box sx={{ display: "grid", gap: 2,
+                     gridTemplateColumns: { xs: "1fr", lg: "1.9fr 1fr" } }}>
+            <Card
+              title="Total sales over time"
+              help="Order value created in this window, bucketed by day — or by hour when the window is a day or two."
+            >
+              <Stack direction="row" spacing={1.25} sx={{ alignItems: "baseline", mb: 2 }}>
+                <Typography sx={{ fontSize: 24, fontWeight: 700 }}>
+                  {inr(data.kpis[0].value)}
+                </Typography>
+                <Delta pct={data.kpis[0].delta_pct} size={12.5} />
+              </Stack>
+              <LineChart
+                series={points}
+                compareSeries={comparePoints}
+                height={210}
+                title="Total sales"
+                seriesLabel={windowLabel(data.window)}
+                compareLabel={windowLabel(data.compare)}
+              />
+            </Card>
+
+            <Card
+              title="Total sales breakdown"
+              help="Gross less what was given away and returned, plus anything carried on the listing."
+            >
+              <Stack spacing={0}>
+                {data.breakdown.map((row) => (
+                  <Stack
+                    key={row.label}
+                    direction="row"
+                    sx={{
+                      justifyContent: "space-between", alignItems: "center", gap: 2,
+                      px: 1, py: 1.05, borderRadius: 1,
+                      bgcolor: row.strong ? "rgba(255,255,255,0.045)" : "transparent",
+                    }}
+                  >
+                    <Tooltip title={row.note ?? ""} placement="left">
+                      <Typography
+                        variant="body2"
+                        sx={{ fontSize: 12.5,
+                              fontWeight: row.strong ? 700 : 500,
+                              color: row.strong ? "text.primary" : "text.secondary",
+                              cursor: row.note ? "help" : "default" }}
+                      >
+                        {row.label}
+                      </Typography>
+                    </Tooltip>
+                    <Stack direction="row" spacing={1.25} sx={{ alignItems: "baseline" }}>
+                      <Typography
+                        variant="body2"
+                        sx={{ fontSize: 12.5, fontWeight: row.strong ? 700 : 600,
+                              fontVariantNumeric: "tabular-nums",
+                              color: row.value < 0 ? "#FBBF24" : "text.primary" }}
+                      >
+                        {inr(row.value)}
+                      </Typography>
+                      <Box sx={{ width: 52, textAlign: "right" }}>
+                        <Delta pct={row.delta_pct} size={11} />
+                      </Box>
+                    </Stack>
+                  </Stack>
+                ))}
+              </Stack>
+
+              {/* Named rather than silently missing, so nobody wonders
+                  whether the page forgot them. */}
+              <Stack spacing={0.5} sx={{ mt: 1.5, pt: 1.5, borderTop: "1px solid",
+                                         borderColor: "divider" }}>
+                {data.breakdown_omitted.map((row) => (
+                  <Typography key={row.label} variant="caption"
+                              sx={{ color: "text.disabled", fontSize: 10.5, lineHeight: 1.55 }}>
+                    <b>{row.label}</b> — {row.why}
+                  </Typography>
+                ))}
+              </Stack>
+            </Card>
+          </Box>
+
+          {/* ── channel, AOV, product ────────────────────────────────── */}
+          <Box sx={{ display: "grid", gap: 2,
+                     gridTemplateColumns: { xs: "1fr", md: "repeat(3, 1fr)" } }}>
+            <Card
+              title="Total sales by channel"
+              help="The four ways into this shop: the agent console, the storefront over UCP or ACP, and the trip sector."
+            >
+              <BarList
+                rows={data.by_channel.map((c) => ({
+                  label: c.label, value: c.value,
+                  sub: c.pct !== null ? `${c.pct}%` : null,
+                }))}
+                empty="No sales in this date range."
+              />
+            </Card>
+
+            <Card
+              title="Average order value over time"
+              help="Order value divided by orders, per bucket. Buckets with no orders sit at zero rather than being interpolated."
+            >
+              <Stack direction="row" spacing={1.25} sx={{ alignItems: "baseline", mb: 1.5 }}>
+                <Typography sx={{ fontSize: 20, fontWeight: 700 }}>
+                  {inr(data.kpis[2].value)}
+                </Typography>
+                <Delta pct={data.kpis[2].delta_pct} />
+              </Stack>
+              <LineChart series={aovPoints} height={132} format={inrShort}
+                         title="Average order value" />
+            </Card>
+
+            <Card
+              title="Total sales by product"
+              help="Line items across every channel, largest first."
+            >
+              <BarList
+                rows={data.by_product.map((p) => ({
+                  label: p.label, value: p.value,
+                  sub: `${p.units} ${p.units === 1 ? "unit" : "units"}`,
+                }))}
+                empty="No products sold in this date range."
+              />
+            </Card>
+          </Box>
+
+          {/* ── retention, and what the payments did ─────────────────── */}
+          <Box sx={{ display: "grid", gap: 2,
+                     gridTemplateColumns: { xs: "1fr", lg: "2fr 1fr" } }}>
+            <Card
+              title="Customer cohort analysis"
+              help="Each row is everyone whose first paid order landed in that month. Each cell is the share of them who ordered again that many months later."
+            >
+              <CohortGrid cohorts={data.cohorts} />
+            </Card>
+
+            <Card
+              title="Payments"
+              help="What happened at the moment money was supposed to move."
+            >
+              <Stack spacing={1.25}>
+                {[
+                  { label: "Captured", value: data.payments.captured, colour: "#4ADE80" },
+                  { label: "Failed", value: data.payments.failed, colour: "#F87171" },
+                  { label: "Refused as unverifiable", value: data.payments.refused_unverifiable,
+                    colour: "#FBBF24" },
+                ].map((row) => (
+                  <Stack key={row.label} direction="row"
+                         sx={{ justifyContent: "space-between", alignItems: "baseline" }}>
+                    <Typography variant="body2" sx={{ fontSize: 12.5, color: "text.secondary" }}>
+                      {row.label}
+                    </Typography>
+                    <Typography sx={{ fontSize: 17, fontWeight: 700, color: row.colour,
+                                      fontVariantNumeric: "tabular-nums" }}>
+                      {row.value}
+                    </Typography>
+                  </Stack>
+                ))}
+              </Stack>
+              <Typography variant="caption"
+                          sx={{ color: "text.disabled", display: "block", mt: 1.5,
+                                lineHeight: 1.6, fontSize: 10.5 }}>
+                A payment refused as unverifiable is the store declining to mark an
+                order paid on an id Razorpay would not confirm. That is a refusal
+                working, not a failure.
+              </Typography>
+            </Card>
+          </Box>
+
+          {/* ── what this page does not claim ────────────────────────── */}
+          <Box sx={{ ...CARD, bgcolor: "transparent" }}>
+            <Stack spacing={0.75}>
+              {data.notes.map((note, i) => (
+                <Typography key={i} variant="caption"
+                            sx={{ color: "text.secondary", lineHeight: 1.7, fontSize: 11.5 }}>
+                  {note}
+                </Typography>
+              ))}
+            </Stack>
+          </Box>
+        </Stack>
+      )}
     </Box>
   );
 }

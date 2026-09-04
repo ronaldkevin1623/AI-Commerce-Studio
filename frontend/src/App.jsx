@@ -2,7 +2,7 @@ import { ThemeProvider, CssBaseline } from "@mui/material";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import theme from "./theme/theme";
 import AppShell from "./components/shared/AppShell";
-import { RoleProvider } from "./context/RoleContext";
+import { RoleProvider, useRole } from "./context/RoleContext";
 import RequireRole from "./components/shared/RequireRole";
 import { ConversationProvider } from "./context/ConversationContext";
 import { HiveSettingsProvider } from "./context/HiveSettingsContext";
@@ -14,7 +14,12 @@ import AgentConsolePage from "./pages/AgentConsolePage";
 import MerchantPage from "./pages/MerchantPage";
 import MerchantProductsPage from "./pages/MerchantProductsPage";
 import MerchantProductFormPage from "./pages/MerchantProductFormPage";
+import MerchantConsolePage from "./pages/MerchantConsolePage";
 import MerchantGrowthPage from "./pages/MerchantGrowthPage";
+import MerchantGrowthAgentsPage from "./pages/MerchantGrowthAgentsPage";
+import MerchantGrowthCampaignsPage from "./pages/MerchantGrowthCampaignsPage";
+import MerchantGrowthAttributionPage from "./pages/MerchantGrowthAttributionPage";
+import MerchantGrowthRelationshipsPage from "./pages/MerchantGrowthRelationshipsPage";
 import MerchantOrdersPage from "./pages/MerchantOrdersPage";
 import RedTeamPage from "./pages/RedTeamPage";
 import SecurityPage from "./pages/SecurityPage";
@@ -25,6 +30,21 @@ import TripDetailPage from "./pages/TripDetailPage";
 import OrderTrackingPage from "./pages/OrderTrackingPage";
 import AuditTrailPage from "./pages/AuditTrailPage";
 import FailureRecoveryPage from "./pages/FailureRecoveryPage";
+
+/**
+ * HOME IS A DIFFERENT AGENT DEPENDING ON WHICH SIDE YOU ARE ON.
+ *
+ * Both parties get a conversational agent at `/console`, and they are not
+ * the same agent: the buyer's turns a sentence into a transaction, the
+ * merchant's turns a sentence into an analysis of their own shop. One route
+ * rather than two because "Home" should mean the same thing to both — the
+ * place you talk to your agent — and because the role switcher in the top
+ * bar then swaps the whole workbench in one click, which is the demo.
+ */
+function RoleConsole() {
+  const { role } = useRole();
+  return role === "merchant" ? <MerchantConsolePage /> : <AgentConsolePage />;
+}
 
 export default function App() {
   return (
@@ -40,12 +60,16 @@ export default function App() {
           <Routes>
             <Route path="/" element={<LandingPage />} />
             <Route path="/hive" element={<HiveMindPage />} />
-            <Route path="/console" element={<AgentConsolePage />} />
+            <Route path="/console" element={<RoleConsole />} />
             <Route path="/approvals" element={<ApprovalsPage />} />
             <Route path="/merchant" element={<MerchantPage />} />
             <Route path="/merchant/products" element={<MerchantProductsPage />} />
             <Route path="/merchant/products/new" element={<MerchantProductFormPage />} />
             <Route path="/merchant/growth" element={<MerchantGrowthPage />} />
+            <Route path="/merchant/growth/agents" element={<MerchantGrowthAgentsPage />} />
+            <Route path="/merchant/growth/campaigns" element={<MerchantGrowthCampaignsPage />} />
+            <Route path="/merchant/growth/attribution" element={<MerchantGrowthAttributionPage />} />
+            <Route path="/merchant/growth/relationships" element={<MerchantGrowthRelationshipsPage />} />
             <Route path="/merchant/orders" element={<MerchantOrdersPage />} />
             <Route path="/trips" element={<TripsPage />} />
             <Route path="/trips/:tripId" element={<TripDetailPage />} />

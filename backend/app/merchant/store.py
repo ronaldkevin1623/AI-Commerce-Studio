@@ -452,3 +452,166 @@ def fulfilment_for_order(razorpay_order_id: str) -> dict | None:
         "tracking_reference": session.get("tracking_reference"),
         "merchant": MERCHANT_NAME,
     }
+
+
+# ── The agent-readable view ──────────────────────────────────────────────
+#
+# A price and a name are enough for a person looking at a page and nowhere
+# near enough for an agent deciding on someone's behalf. "Running shoes under
+# ₹3,000, black, size 9, delivered within 3 days" is four constraints, and a
+# catalogue that publishes only name and price forces the agent to guess at
+# three of them — or to fetch the product page and read prose, which is
+# scraping with extra steps.
+#
+# So the store publishes what it can actually assert about its own goods.
+# The split below is the important part:
+#
+#   OBSERVED    stock, price, status — facts in the merchant's own records
+#   DECLARED    delivery window, returns window, whether agents may check out
+#
+# Declared is not weaker, it is different: a shop's returns policy is a
+# promise it is making, not a measurement it took. Every declared field
+# carries `declared_by` so an agent reading this knows it is holding the
+# merchant to a statement rather than to an observation. A field the store
+# has no basis for is omitted rather than defaulted — an invented delivery
+# estimate is the one lie a buying agent would act on immediately.
+
+# The store's own standing terms. Merchant-level rather than per-product
+# because that is how this shop actually operates: one fulfilment process,
+# one returns window. A product may override either.
+STORE_TERMS = {
+    "delivery": {
+        "estimated_days": 3,
+        "ships_to": ["IN"],
+        "declared_by": "merchant",
+        "note": ("The merchant's standing fulfilment window. Not a carrier "
+                 "quote and not tracked against actual deliveries."),
+    },
+    "returns": {
+        "days": 7,
+        "declared_by": "merchant",
+        "note": "The merchant's standing returns window.",
+    },
+}
+
+
+def agent_view(product: dict) -> dict:
+    """
+    One product as a buying agent needs to read it.
+
+    Everything here is either in the record or in the store's declared
+    terms. Nothing is estimated, and the `purchase` block describes the
+    gate this project actually applies rather than a capability claim.
+    """
+    price_paise = int(product.get("price_paise") or 0)
+    stock = int(product.get("stock") or 0)
+    status = (product.get("status") or "active").lower()
+
+    view = {
+        "product_id": product.get("id"),
+        "name": product.get("name"),
+        "category": product.get("category"),
+        "price_paise": price_paise,
+        "price": round(price_paise / 100, 2),
+        "currency": "INR",
+        # Two separate facts that are easy to conflate: a draft product is in
+        # stock and still not for sale.
+        "availability": status == "active" and stock > 0,
+        "inventory": stock,
+        "status": status,
+        "condition": product.get("condition"),
+        "description": product.get("description"),
+        "attributes": product.get("attributes") or {},
+        "delivery": dict(STORE_TERMS["delivery"]),
+        "return_policy": dict(STORE_TERMS["returns"]),
+        "purchase": {
+            "supports_agent_checkout": True,
+            "protocols": ["ucp", "acp"],
+            # The single most important field for an agent to read before it
+            # commits to anything: this store will take an agent's order and
+            # a person still has to clear it above the bound.
+            "requires_user_approval": "above the buyer's own spending bound",
+            "approval_note": (
+                "This store accepts agent checkout. Whether a person must "
+                "approve is decided by the BUYER's policy, not this "
+                "merchant's — see GET /transaction-policy on the buying "
+                "agent. The merchant does not get to lower somebody else's "
+                "spending limit."
+            ),
+            "payment_handlers": ["razorpay"],
+            "delegated_payment_tokens": False,
+        },
+        "merchant": {"id": MERCHANT_ID, "name": MERCHANT_NAME},
+    }
+
+    # Said out loud, because an agent choosing between listings on a photo
+    # would otherwise be comparing a photograph against a drawing.
+    if product.get("image_kind") == "generated_illustration":
+        view["image_kind"] = "generated_illustration"
+        view["image_note"] = ("A generated illustration, not a product "
+                              "photograph. This store has no product "
+                              "photography.")
+    return view
+
+def live_offer(product_id: str) -> dict | None:
+    """
+    The growth offer standing against this product, if one was approved.
+
+    THIS IS THE STEP THAT CLOSES THE LOOP.
+
+    Before this, a merchant could approve a cross-sell and the buyer would
+    never see it: the offer went into `growth_offers` and no customer-facing
+    surface read that collection. The whole chain — agent proposes, gate
+    rules, merchant approves — ended in a database row nobody acted on.
+
+    Resolved rather than raw: the offer stores a complement id, and an agent
+    or a screen that has to make a second call to find out what that id is
+    will sometimes not bother. The complement's real name, price and stock
+    travel with it, read from the catalogue at the moment of asking so a
+    sold-out complement cannot be recommended.
+    """
+    try:
+        from app.growth import registry
+    except Exception:
+        return None
+    for offer in registry.offers_for(product_id):
+        params = offer.get("params") or {}
+        complement_id = params.get("complement_id")
+        if not complement_id:
+            continue
+        complement = get_product(complement_id)
+        # A draft or an out-of-stock complement is not a recommendation, it
+        # is a dead end with a price on it.
+        if not complement or (complement.get("status") or "active") != "active":
+            continue
+        if int(complement.get("stock") or 0) <= 0:
+            continue
+        return {
+            "offer_id": offer.get("offer_id"),
+            "agent": offer.get("agent"),
+            "kind": offer.get("kind"),
+            "basis": params.get("basis"),
+            "approved_by": offer.get("approved_by"),
+            "product": {
+                "id": complement["id"],
+                "name": complement["name"],
+                "price_paise": complement["price_paise"],
+                "image": complement.get("image"),
+                "stock": complement.get("stock"),
+            },
+            # The sentence a buyer sees, and it must not overstate the basis.
+            # "Frequently bought together" on a pair nobody has ever bought
+            # together is the exact lie the relationship graph exists to
+            # prevent, so the wording changes with the evidence.
+            "message": (
+                f"Customers buying this also bought {complement['name']} "
+                f"(₹{complement['price_paise'] / 100:,.0f})."
+                if params.get("basis") == "co_purchase" else
+                f"{complement['name']} (₹{complement['price_paise'] / 100:,.0f}) "
+                f"is filed alongside this one. Nobody has bought the two "
+                f"together yet — this is the shop's suggestion, not a pattern."
+            ),
+            "disclosure": ("Shown because the merchant approved a cross-sell "
+                           "for this product. It changes no price."),
+        }
+    return None

@@ -165,3 +165,38 @@ def measure_campaign(campaign_id: str):
     if not result.get("ok"):
         raise HTTPException(status_code=404, detail=result.get("error"))
     return result
+
+
+@router.get("/graph")
+def relationship_graph():
+    """
+    The product relationship graph the cross-sell and bundle agents reason
+    over, exposed so the basis for a recommendation can be inspected rather
+    than taken on trust. Every edge says whether it was observed in real
+    orders or assumed from category.
+    """
+    from app.growth import graph
+    return graph.build()
+
+
+@router.get("/graph/{product_id}")
+def relationship_for(product_id: str, limit: int = 3):
+    from app.growth import graph
+    complements = graph.complements(product_id, limit=limit)
+    return {
+        "product_id": product_id,
+        "complements": complements,
+        "note": ("Observed co-purchase outranks category adjacency "
+                 "absolutely — one real pairing beats any number of products "
+                 "filed in the same folder."),
+    }
+
+
+@router.get("/attribution")
+def attribution(days: int = 30):
+    """
+    What the growth agents cost and what can honestly be traced back to
+    them. Attributed, not incremental — the payload says so itself.
+    """
+    from app.growth import attribution as attribution_module
+    return attribution_module.build(days=days)

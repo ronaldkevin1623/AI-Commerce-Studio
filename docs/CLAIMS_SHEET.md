@@ -20,10 +20,11 @@ Every number you might say out loud, with how it was checked. Measured
 | What the hotel step considered | **40 under the nightly cap** | step trace |
 | What the meal step considered | **120, placed 3 of 4** | step trace |
 | Sectors registered | **2 — `/products`, `/trip`** | `GET /sectors` |
-| Growth agents | **4 — cart recovery, cross-sell, discount test, campaigns** | `GET /growth/agents` |
+| Growth agents | **5 — cart recovery, cross-sell, discount test, reactivation, bundles** | `GET /growth/agents`; campaigns orchestrate them rather than being one |
+| Of those, agents that spend margin | **4 — recovery, discount test, reactivation, bundles** | asserted by roster, not by count, in `audit_24_growth` |
 | Merchant-side bounds | **5 — kill switch, per-action cap, daily cap, discount ceiling, evidence floor** | `app/growth/gate.py`, all five exercised in `audit_24_growth` |
 | Hive | **23 of 25 specialists live, 9 tunable** | the Hive page header |
-| Test suite | **597 assertions passed, 2 failed, 25 suites, 102s** | `tests/run_all.py` |
+| Test suite | **617 assertions passed, 2 failed, 25 suites** | `tests/run_all.py` |
 | Merchant catalogue | **8 products; operator sees 8, buying agent sees 7** | `/merchant/products` vs `/merchant/catalog` |
 | Recommendation row | **12 cards, 7 of them the store's own products** | `GET /recommendations`; store items reach it now they carry an image |
 | Autonomy gates | **6** | `kill_switch, per_order_cap, monthly_cap, category, confidence, already_bought` |
@@ -82,6 +83,62 @@ Also verified: booking a **different** hotel against the same request returns
 | No uplift is claimed | measurement reports counts and sample size; "no control group exists here" |
 
 **Say:** *"The same bar the buying agent passes, the selling agent passes too."*
+
+## The closing half of the loop — attribution
+
+| Claim | Value | How it was checked |
+|---|---|---|
+| Revenue attributed to growth agents | **whatever `GET /growth/attribution` says today** | counted from orders an applied action is attached to, never "orders after a campaign started" |
+| Margin given away | **reported beside it, at the same size** | `margin_spent_paise` in the same payload |
+| Conversion rate claimed | **none, at any sample size** | asserted: no `%` appears in the headline or the caveat |
+
+**The sentence that makes this a strength rather than a weakness:**
+
+> "Attribution is the easiest place in a commerce system to lie, because the
+> lie is arithmetic rather than invention — count every order after the
+> campaign started and you get a large number that would have been almost
+> identical with no agent running. This counts only orders an action is
+> attached to: the offer went on that cart, and that cart paid."
+
+**Say with the caveat, always:** attributed is not incremental. Some of
+those customers would have paid anyway, and separating them needs a holdout
+group this build has no traffic for. The payload says so itself.
+
+## The product relationship graph
+
+| Claim | Value | How it was checked |
+|---|---|---|
+| Edges learned from real orders | **0 today** | `GET /growth/graph` — no two products have yet been bought together |
+| Edges from category adjacency | **2** | same call |
+| Order records read | **37** | buyer-side `orders` plus `merchant_checkouts` |
+
+**Do NOT say** the graph shows what customers buy together — today it shows
+that nothing has been bought together yet, and draws the assumptions
+differently for exactly that reason. That refusal is the claim worth making:
+
+> "An assumed edge carries `support: 0`. Not 1 — nothing was observed, and
+> writing 1 there would make an assumption indistinguishable from a sale."
+
+## The agent-readable catalogue and the transaction policy
+
+| Claim | Value | How it was checked |
+|---|---|---|
+| Catalogue fields an agent can act on | **availability, inventory, attributes, delivery, return_policy, purchase, complements** | `GET /merchant/catalog/{id}` |
+| Merchant-declared fields | **delivery and returns**, each carrying `declared_by: merchant` | same payload |
+| Draft product on the agent catalogue | **404** | verified; matches the 409 UCP and ACP already give |
+| Bounds in the transaction policy | **5, each naming the module that enforces it** | `GET /transaction-policy` |
+| Behaviours declared | **5**, including `auto_retry_payment: false` | asserted in `audit_24_growth` |
+| Policy tracks the live setting | **yes** | asserted: changing the limit changes the document |
+
+**The line for `auto_retry_payment: false`:**
+
+> "That is in the policy because no code path in this project retries a
+> charge — not because a flag is switched off. A failed payment's next
+> attempt is a fresh action, gated and logged from scratch."
+
+**Do NOT say** the checkout's green tick means the purchase will go through.
+It is one of the gate's six checks, and the screen names the five it did not
+run.
 
 ## Protocols — the one-line answer for each
 

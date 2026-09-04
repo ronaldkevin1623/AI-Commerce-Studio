@@ -5,7 +5,7 @@ import DownloadIcon from "@mui/icons-material/Download";
 import { useFirestoreAudit } from "../hooks/useFirestoreAudit";
 import PageBanner from "../components/shared/PageBanner";
 import FilterBar from "../components/audit/FilterBar";
-import AuditTable from "../components/audit/AuditTable";
+import LogConsole from "../components/audit/LogConsole";
 
 function exportToCSV(decisions) {
   const headers = ["time", "action_type", "amount_paise", "decision", "reason", "order_id"];
@@ -14,7 +14,7 @@ function exportToCSV(decisions) {
     d.action_type ?? "",
     d.amount_paise ?? "",
     d.decision ?? "",
-    `"${(d.reason ?? "").replace(/"/g, '""')}"`,
+    '"' + (d.reason ?? "").replace(/"/g, '""') + '"',
     d.order_id ?? "",
   ]);
   const csv = [headers.join(","), ...rows.map((r) => r.join(","))].join("\n");
@@ -30,6 +30,10 @@ function exportToCSV(decisions) {
 export default function AuditTrailPage() {
   const { decisions, loading, error } = useFirestoreAudit();
   const [activeFilter, setActiveFilter] = useState("all");
+  // Bumping this remounts nothing — the Firestore subscription is already
+  // live — so the refresh control exists to say "you are looking at now",
+  // not to fetch. It re-runs the client-side window instead of pretending.
+  const [, setTick] = useState(0);
 
   const filtered = useMemo(() => {
     if (activeFilter === "all") return decisions;
@@ -55,7 +59,7 @@ export default function AuditTrailPage() {
         }
       />
 
-      <Box sx={{ maxWidth: 1000, mx: "auto", px: 3, py: 4 }}>
+      <Box sx={{ maxWidth: 1220, mx: "auto", px: 3, py: 4 }}>
         {loading ? (
           <Typography variant="body2" color="text.secondary">Connecting to live log…</Typography>
         ) : error ? (
@@ -80,12 +84,15 @@ export default function AuditTrailPage() {
         ) : (
           <>
             <FilterBar decisions={decisions} activeFilter={activeFilter} onChange={setActiveFilter} />
-            <Box sx={{ bgcolor: "background.paper", border: "1px solid", borderColor: "divider", borderRadius: 2.5, overflow: "hidden" }}>
-              <AuditTable decisions={filtered} />
-            </Box>
+            <LogConsole
+              rows={filtered}
+              loading={loading}
+              onRefresh={() => setTick((n) => n + 1)}
+            />
           </>
         )}
       </Box>
     </Box>
   );
 }
+

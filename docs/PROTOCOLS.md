@@ -115,6 +115,46 @@ current spec.
 
 ---
 
+## The agent-readable catalogue
+
+A protocol gets an agent to the door. What it finds inside decides whether
+it can act. `GET /merchant/catalog` and `GET /merchant/catalog/{id}` publish
+each product in the shape a buying agent actually has to reason over:
+
+```
+availability      active AND in stock — two facts, deliberately not merged
+inventory         the count, so an agent can size an order
+attributes        the merchant's own structured fields
+delivery          estimated_days, ships_to        declared_by: merchant
+return_policy     days                            declared_by: merchant
+purchase          supports_agent_checkout, protocols, payment_handlers,
+                  delegated_payment_tokens: false
+complements       what the store has OBSERVED going with this product,
+                  each carrying its basis
+```
+
+Two rules hold this together.
+
+**Observed and declared are marked apart.** Stock and price are facts in the
+merchant's records. A returns window is a promise the merchant is making.
+Both are legitimate to publish and they are not the same kind of statement,
+so every declared field carries `declared_by` and an agent knows which it is
+holding the shop to.
+
+**A field with no basis is omitted, never defaulted.** An invented delivery
+estimate is the one lie a buying agent would act on immediately.
+
+`requires_user_approval` is the field worth reading twice. It answers "above
+the buyer's own spending bound" rather than yes or no, because a merchant
+does not get to decide when somebody else's agent needs a person — that is
+the buyer's `GET /transaction-policy`, and it is the buyer's gate that
+enforces it.
+
+A draft product 404s here, exactly as it 409s in UCP and ACP checkout. One
+rule, three surfaces.
+
+---
+
 ## The pattern
 
 Three of these are implemented against published specifications. One is

@@ -1,50 +1,37 @@
 import { useCallback, useEffect, useState } from "react";
 import {
-  Box, Button, Stack, Typography, TextField, MenuItem, CircularProgress, Chip,
+  Box, Button, Stack, Typography, CircularProgress, Chip,
 } from "@mui/material";
 import { Link } from "react-router-dom";
-import SpeedOutlinedIcon from "@mui/icons-material/SpeedOutlined";
 import CloseIcon from "@mui/icons-material/Close";
-import CheckCircleOutlineIcon from "@mui/icons-material/CheckCircleOutlineOutlined";
-import ErrorOutlineIcon from "@mui/icons-material/ErrorOutlineOutlined";
 import OpenInNewIcon from "@mui/icons-material/OpenInNew";
 
 import { API_BASE } from "../config";
-import GrowthQueue from "../components/growth/GrowthQueue";
-import CampaignPanel from "../components/growth/CampaignPanel";
+import GrowthPage, { CARD, Empty, Section } from "../components/growth/GrowthPage";
+import DateRangePicker from "../components/growth/DateRangePicker";
 
 const DISMISS_KEY = "commerce-studio.growth.heroDismissed";
-
-const RANGES = [
-  { value: 7, label: "Last 7 days" },
-  { value: 30, label: "Last 30 days" },
-  { value: 90, label: "Last 90 days" },
-];
 
 const inr = (paise) =>
   `₹${((paise ?? 0) / 100).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
-const CARD = {
-  border: "1px solid",
-  borderColor: "divider",
-  borderRadius: 2.5,
-  bgcolor: "background.paper",
-  p: 2,
-};
-
 /**
- * Growth for the storefront.
+ * GROWTH, THE OVERVIEW.
  *
- * The reference admin fills this page with a campaign product waitlist, ad
- * attribution and web sessions by traffic source. This store has no ad
- * channels, no web sessions and no campaigns — so rather than draw those
- * charts with invented numbers, the same layout asks the questions this
- * store can actually answer: what did AI buyers bring in, what did they do,
- * and can they still find the shop.
+ * What this page is for is what it does NOT hold. The queue, the campaigns,
+ * the attribution report and the relationship graph each moved to their own
+ * page, reachable from the tab strip and the sidebar. What is left is one
+ * question: how is the agent channel doing, over a window you choose.
+ *
+ * The reference admin fills this page with ad attribution and web sessions
+ * by traffic source. This store has no ad channels and no web sessions, so
+ * rather than draw those charts with invented numbers the same layout asks
+ * the questions this store can answer: what did AI buyers bring in, and what
+ * did they do.
  *
  * Every figure comes from /merchant/growth, which reads orders and decisions
- * already in Firestore. Where a window genuinely has no data, it says so
- * instead of drawing a flat chart that looks like a measurement.
+ * already in Firestore. Where a window genuinely has no data it says so
+ * rather than drawing a flat line that looks like a measurement.
  */
 function Sparkline({ series }) {
   const points = series ?? [];
@@ -73,7 +60,7 @@ function Sparkline({ series }) {
 }
 
 export default function MerchantGrowthPage() {
-  const [days, setDays] = useState(30);
+  const [range, setRange] = useState(null);
   const [state, setState] = useState({ status: "loading", data: null, error: null });
   const [heroOpen, setHeroOpen] = useState(() => {
     try {
@@ -83,10 +70,16 @@ export default function MerchantGrowthPage() {
     }
   });
 
-  const load = useCallback(async (windowDays) => {
+  // A rolling window asks by day count so it keeps rolling; a fixed one asks
+  // by date so it stays put. Sending the dates for both would silently turn
+  // "last 30 days" into a window that stops moving at midnight.
+  const load = useCallback(async (selected) => {
     setState((s) => ({ ...s, status: "loading" }));
+    const query = !selected || selected.rolling
+      ? `days=${selected?.days ?? 30}`
+      : `start=${selected.startISO}&end=${selected.endISO}`;
     try {
-      const res = await fetch(`${API_BASE}/merchant/growth?days=${windowDays}`);
+      const res = await fetch(`${API_BASE}/merchant/growth?${query}`);
       if (!res.ok) throw new Error(`Store returned ${res.status}`);
       setState({ status: "ready", data: await res.json(), error: null });
     } catch (err) {
@@ -95,8 +88,8 @@ export default function MerchantGrowthPage() {
   }, []);
 
   useEffect(() => {
-    load(days);
-  }, [load, days]);
+    load(range);
+  }, [load, range]);
 
   const dismissHero = () => {
     setHeroOpen(false);
@@ -110,25 +103,15 @@ export default function MerchantGrowthPage() {
   const { status, data, error } = state;
   const sales = data?.sales;
   const activity = data?.activity ?? [];
-  const discovery = data?.discoverability;
   const peakActivity = Math.max(1, ...activity.map((a) => a.count));
 
   return (
-    <Box sx={{ p: 3, maxWidth: 1180, mx: "auto" }}>
-      <Stack direction="row" spacing={1} sx={{ alignItems: "center", mb: 2.5 }}>
-        <SpeedOutlinedIcon sx={{ fontSize: 18, color: "text.secondary" }} />
-        <Typography variant="h6" sx={{ fontSize: 19, fontWeight: 600 }}>
-          Growth
-        </Typography>
-      </Stack>
-
-      {/* The agents come first: what wants to happen to margin today is
-          more urgent than last week's chart. */}
-      <GrowthQueue card={CARD} />
-      <CampaignPanel card={CARD} />
-
+    <GrowthPage
+      title="Overview"
+      subtitle="What the agent channel brought in, over a window you choose."
+    >
       {heroOpen && (
-        <Box sx={{ ...CARD, position: "relative", mb: 3, p: 2.5 }}>
+        <Box sx={{ ...CARD, position: "relative", mb: 3.5, p: 2.5 }}>
           <Button
             size="small"
             onClick={dismissHero}
@@ -152,7 +135,7 @@ export default function MerchantGrowthPage() {
           <Typography variant="body2" sx={{ color: "text.secondary", maxWidth: 620, lineHeight: 1.7, mb: 2 }}>
             The storefront publishes a UCP discovery document, so a buying agent can find it,
             read its catalogue and pay for an order without anyone building an integration
-            first. This page measures that channel.
+            first. This section measures that channel.
           </Typography>
 
           <Stack direction="row" spacing={1.5}>
@@ -173,55 +156,46 @@ export default function MerchantGrowthPage() {
         </Box>
       )}
 
-      <Stack
-        direction="row"
-        sx={{ alignItems: "center", justifyContent: "space-between", mb: 1.5, gap: 2 }}
+      <Section
+        title="Performance"
+        note={
+          data
+            ? `${data.from} to ${data.to} · ${data.window_days} ${data.window_days === 1 ? "day" : "days"}`
+            : undefined
+        }
+        action={
+          <Stack direction="row" spacing={1.5} sx={{ alignItems: "center" }}>
+            <DateRangePicker value={range} onChange={setRange} />
+            <Button size="small" component={Link} to="/merchant" sx={{ color: "text.secondary" }}>
+              View details
+            </Button>
+          </Stack>
+        }
       >
-        <Typography sx={{ fontSize: 15, fontWeight: 600 }}>Performance</Typography>
-        <Stack direction="row" spacing={1.5} sx={{ alignItems: "center" }}>
-          <TextField
-            select
-            size="small"
-            value={days}
-            onChange={(e) => setDays(Number(e.target.value))}
-            sx={{ width: 160 }}
-          >
-            {RANGES.map((r) => (
-              <MenuItem key={r.value} value={r.value}>{r.label}</MenuItem>
-            ))}
-          </TextField>
-          <Button size="small" component={Link} to="/merchant" sx={{ color: "text.secondary" }}>
-            View details
-          </Button>
-        </Stack>
-      </Stack>
+        {status === "loading" && (
+          <Stack sx={{ alignItems: "center", py: 8 }}><CircularProgress size={22} /></Stack>
+        )}
 
-      {status === "loading" && (
-        <Stack sx={{ alignItems: "center", py: 8 }}><CircularProgress size={22} /></Stack>
-      )}
+        {status === "error" && (
+          <Box sx={{ ...CARD, borderColor: "error.main", bgcolor: "rgba(239,68,68,0.08)" }}>
+            <Typography variant="body2" sx={{ color: "error.main", fontWeight: 600 }}>
+              Couldn't read growth data
+            </Typography>
+            <Typography variant="caption" sx={{ color: "text.secondary" }}>{error}</Typography>
+          </Box>
+        )}
 
-      {status === "error" && (
-        <Box sx={{ ...CARD, borderColor: "error.main", bgcolor: "rgba(239,68,68,0.08)" }}>
-          <Typography variant="body2" sx={{ color: "error.main", fontWeight: 600 }}>
-            Couldn't read growth data
-          </Typography>
-          <Typography variant="caption" sx={{ color: "text.secondary" }}>{error}</Typography>
-        </Box>
-      )}
-
-      {status === "ready" && (
-        <>
+        {status === "ready" && (
           <Box
             sx={{
               display: "grid",
               gridTemplateColumns: { xs: "1fr", md: "1fr 1fr" },
               gap: 2,
-              mb: 3,
             }}
           >
             <Box sx={CARD}>
               <Typography variant="body2" sx={{ fontWeight: 600, fontSize: 13.5, mb: 0.5 }}>
-                Sales attributed to agents
+                Sales through the agent channel
               </Typography>
               <Stack direction="row" spacing={1} sx={{ alignItems: "baseline" }}>
                 <Typography sx={{ fontSize: 26, fontWeight: 700 }}>
@@ -239,9 +213,7 @@ export default function MerchantGrowthPage() {
               {sales.order_count > 0 ? (
                 <Sparkline series={sales.series} />
               ) : (
-                <Typography variant="caption" sx={{ color: "text.disabled", display: "block", mt: 2 }}>
-                  No orders in this date range.
-                </Typography>
+                <Empty height={64}>No orders in this date range.</Empty>
               )}
             </Box>
 
@@ -251,11 +223,7 @@ export default function MerchantGrowthPage() {
               </Typography>
 
               {activity.length === 0 ? (
-                <Stack sx={{ alignItems: "center", justifyContent: "center", py: 4 }}>
-                  <Typography variant="body2" sx={{ color: "text.disabled" }}>
-                    No data for this date range
-                  </Typography>
-                </Stack>
+                <Empty height={104}>No data for this date range.</Empty>
               ) : (
                 <Stack spacing={1}>
                   {activity.map((row) => (
@@ -283,46 +251,9 @@ export default function MerchantGrowthPage() {
               )}
             </Box>
           </Box>
+        )}
+      </Section>
 
-          <Typography sx={{ fontSize: 15, fontWeight: 600, mb: 1.5 }}>
-            Discoverability
-          </Typography>
-          <Box sx={{ ...CARD, mb: 3 }}>
-            <Stack spacing={1.5}>
-              {(discovery?.checks ?? []).map((check) => (
-                <Stack key={check.label} direction="row" spacing={1.25} sx={{ alignItems: "flex-start" }}>
-                  {check.ok ? (
-                    <CheckCircleOutlineIcon sx={{ fontSize: 16, color: "success.main", mt: "1px" }} />
-                  ) : (
-                    <ErrorOutlineIcon sx={{ fontSize: 16, color: "warning.main", mt: "1px" }} />
-                  )}
-                  <Box>
-                    <Typography variant="body2" sx={{ fontSize: 13, fontWeight: 500 }}>
-                      {check.label}
-                    </Typography>
-                    <Typography variant="caption" sx={{ color: "text.secondary" }}>
-                      {check.detail}
-                    </Typography>
-                  </Box>
-                </Stack>
-              ))}
-            </Stack>
-          </Box>
-
-          <Typography sx={{ fontSize: 15, fontWeight: 600, mb: 1.5 }}>
-            Campaigns
-          </Typography>
-          <Box sx={CARD}>
-            <Typography variant="body2" sx={{ color: "text.secondary", lineHeight: 1.7 }}>
-              There are no campaigns. This store has no ad channels, no marketing spend and no
-              web sessions to attribute, so there is nothing here to measure yet — and a
-              campaign report drawn from numbers that do not exist would be worse than an
-              empty section. Agent discovery above is the only channel currently bringing
-              orders in.
-            </Typography>
-          </Box>
-        </>
-      )}
-    </Box>
+    </GrowthPage>
   );
 }

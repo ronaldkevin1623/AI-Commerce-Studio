@@ -8,6 +8,7 @@ import CreditCardOutlinedIcon from "@mui/icons-material/CreditCardOutlined";
 import LockOutlinedIcon from "@mui/icons-material/LockOutlined";
 
 import { useDeliveryLocation } from "../../hooks/useDeliveryLocation";
+import PolicyCheck from "./PolicyCheck";
 
 const inr = (paise) =>
   `₹${((paise ?? 0) / 100).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -233,6 +234,14 @@ export default function CheckoutSheet({ open, product, onClose, onPay, busy, err
             and is collected by eBay, not here.
           </Typography>
         )}
+
+        {/* The bound, before the money moves rather than after it is
+            refused. Only the item price is charged, so that is the amount
+            judged — showing the total here would test a number Razorpay
+            never sees. */}
+        <Box sx={{ mt: 1.75 }}>
+          <PolicyCheck amountPaise={product.price_paise} />
+        </Box>
 
         {error && (
           <Typography variant="caption" sx={{ color: "error.main", display: "block", mt: 1 }}>

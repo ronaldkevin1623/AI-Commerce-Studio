@@ -60,7 +60,20 @@ const PRIMARY_BY_ROLE = {
     { label: "Home", icon: <HomeOutlinedIcon />, path: "/console" },
     { label: "Storefront", icon: <StorefrontOutlinedIcon />, path: "/merchant/products" },
     { label: "Orders", icon: <ReceiptLongOutlinedIcon />, path: "/merchant/orders" },
-    { label: "Growth", icon: <SpeedOutlinedIcon />, path: "/merchant/growth" },
+    {
+      label: "Growth",
+      icon: <SpeedOutlinedIcon />,
+      path: "/merchant/growth",
+      // Growth is a section, not a page. The children are listed here rather
+      // than only inside it because "what is waiting on me" should be one
+      // click from anywhere in the admin, not one click after a landing page.
+      children: [
+        { label: "Agents", path: "/merchant/growth/agents" },
+        { label: "Campaigns", path: "/merchant/growth/campaigns" },
+        { label: "Attribution", path: "/merchant/growth/attribution" },
+        { label: "Relationships", path: "/merchant/growth/relationships" },
+      ],
+    },
     { label: "Analytics", icon: <BarChartOutlinedIcon />, path: "/merchant" },
   ],
 };
@@ -141,6 +154,54 @@ function Row({ item, active, onClick }) {
   );
 }
 
+/**
+ * A child row under an expanded parent.
+ *
+ * Indented and given a turn-in glyph rather than an icon of its own: an icon
+ * per child makes four sub-items read as four more top-level destinations,
+ * which is the opposite of what nesting them was for.
+ */
+function ChildRow({ item, active }) {
+  return (
+    <Box component={Link} to={item.path} sx={{ textDecoration: "none", display: "block" }}>
+      <Stack
+        direction="row"
+        spacing={1}
+        sx={{
+          alignItems: "center",
+          height: ROW_H - 3,
+          pl: 2.25, pr: 1,
+          borderRadius: 1.5,
+          color: active ? "text.primary" : "text.secondary",
+          bgcolor: active ? "rgba(255,255,255,0.08)" : "transparent",
+          cursor: "pointer",
+          transition: "background-color 130ms, color 130ms",
+          "&:hover": {
+            bgcolor: active ? "rgba(255,255,255,0.08)" : "rgba(255,255,255,0.04)",
+            color: "text.primary",
+          },
+        }}
+      >
+        <Box
+          sx={{
+            width: 12, flexShrink: 0, color: "text.disabled",
+            fontSize: 11, lineHeight: 1, opacity: active ? 0.9 : 0.55,
+          }}
+        >
+          ↳
+        </Box>
+        <Typography
+          variant="body2"
+          noWrap
+          sx={{ fontSize: 12.5, fontWeight: active ? 600 : 500, flex: 1, minWidth: 0 }}
+        >
+          {item.label}
+        </Typography>
+      </Stack>
+    </Box>
+  );
+}
+
 function SectionHeader({ label, open, onToggle }) {
   return (
     <Stack
@@ -204,13 +265,20 @@ export default function AppSidebar() {
   // Products and not Analytics. A plain startsWith would light both, since
   // Analytics owns /merchant and every product route sits underneath it.
   const paths = [...PRIMARY, ...ACCOUNTABILITY]
-    .map((i) => i.path)
+    .flatMap((i) => [i.path, ...(i.children ?? []).map((c) => c.path)])
     .filter(Boolean);
   const best = paths
     .filter((p) => location.pathname === p || location.pathname.startsWith(`${p}/`))
     .sort((a, b) => b.length - a.length)[0];
 
   const isActive = (item) => Boolean(item.path) && item.path === best;
+
+  // A parent stays lit while you are anywhere inside its section, so the
+  // sidebar still answers "where am I" on a sub-page — but it is a softer
+  // state than the child's, or two rows would claim to be the current page.
+  const inSection = (item) =>
+    Boolean(item.children) &&
+    (location.pathname === item.path || location.pathname.startsWith(`${item.path}/`));
 
   return (
     <Box
@@ -251,7 +319,19 @@ export default function AppSidebar() {
       >
         <Stack spacing={0.25}>
           {PRIMARY.map((item) => (
-            <Row key={item.label} item={item} active={isActive(item)} />
+            <Box key={item.label}>
+              <Row item={item} active={isActive(item)} />
+              {/* Children appear only while you are inside the section. An
+                  always-open tree puts four rows a merchant is not using
+                  between Growth and Analytics. */}
+              {inSection(item) && (
+                <Stack spacing={0.25} sx={{ mt: 0.25 }}>
+                  {item.children.map((child) => (
+                    <ChildRow key={child.path} item={child} active={child.path === best} />
+                  ))}
+                </Stack>
+              )}
+            </Box>
           ))}
         </Stack>
 

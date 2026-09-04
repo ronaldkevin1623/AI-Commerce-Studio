@@ -50,6 +50,16 @@ def bootstrap() -> None:
         register(DiscountExperimentAgent())
     except Exception as exc:
         print(f"[growth] discount test unavailable: {exc}", flush=True)
+    try:
+        from app.growth.reactivation import ReactivationAgent
+        register(ReactivationAgent())
+    except Exception as exc:
+        print(f"[growth] reactivation unavailable: {exc}", flush=True)
+    try:
+        from app.growth.bundles import BundleAgent
+        register(BundleAgent())
+    except Exception as exc:
+        print(f"[growth] bundles unavailable: {exc}", flush=True)
 
 
 def describe() -> list[dict]:

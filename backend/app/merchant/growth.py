@@ -41,17 +41,53 @@ def _as_datetime(value):
     return None
 
 
-def build(days: int = 30) -> dict:
-    """
-    Everything the Growth page shows, for a window of `days`.
+def _parse_date(value):
+    """An ISO date from a query string, or None if it is not one."""
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(str(value)[:10]).replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
 
-    One pass over orders and one over decisions, bucketed by day. The window
-    is inclusive of today, so "last 30 days" means 30 buckets ending now
-    rather than 30 whole days ending at midnight.
+
+def build(days: int = 30, start_date=None, end_date=None) -> dict:
     """
-    days = max(1, min(int(days or 30), 365))
+    Everything the Growth page shows, for a window.
+
+    Two ways to ask, because the page has two controls that mean different
+    things. `days` is a rolling window ending now — "the last 30 days" moves
+    with the clock. `start_date`/`end_date` is a fixed window someone picked
+    off a calendar, and it must not drift: a range ending last Tuesday still
+    ends last Tuesday when the page is reloaded on Thursday.
+
+    An explicit range wins where both are given. Ranges are clamped to a year
+    of buckets, because the series is rendered as one point per day and a
+    ten-year request would return a payload nobody can draw.
+
+    One pass over orders and one over decisions, bucketed by day. A rolling
+    window is inclusive of today, so "last 30 days" means 30 buckets ending
+    now rather than 30 whole days ending at midnight.
+    """
     now = datetime.now(timezone.utc)
-    start = (now - timedelta(days=days - 1)).replace(hour=0, minute=0, second=0, microsecond=0)
+    midnight = {"hour": 0, "minute": 0, "second": 0, "microsecond": 0}
+
+    start = _parse_date(start_date)
+    end = _parse_date(end_date)
+    if start and end:
+        # Backwards is a slip, not an error worth refusing over — a picker
+        # that lets you drag right-to-left produces it, and the honest
+        # reading of "3rd to the 1st" is the same three days.
+        if end < start:
+            start, end = end, start
+        end = min(end, now.replace(**midnight))
+        days = (end - start).days + 1
+        days = max(1, min(days, 366))
+        start = end - timedelta(days=days - 1)
+    else:
+        days = max(1, min(int(days or 30), 365))
+        end = now.replace(**midnight)
+        start = (now - timedelta(days=days - 1)).replace(**midnight)
 
     buckets = [(start + timedelta(days=i)).date() for i in range(days)]
     created_by_day = {day: 0 for day in buckets}
@@ -72,6 +108,8 @@ def build(days: int = 30) -> dict:
         if when is None or when < start:
             continue
 
+        # The bucket test is what excludes anything after the window, now
+        # that a window can end before today.
         day = when.date()
         if day not in created_by_day:
             continue
@@ -95,7 +133,7 @@ def build(days: int = 30) -> dict:
         if action not in dict(AGENT_ACTIONS):
             continue
         when = _as_datetime(row.get("timestamp"))
-        if when is None or when < start:
+        if when is None or when < start or when.date() not in created_by_day:
             continue
         counts[action] = counts.get(action, 0) + 1
 
@@ -109,7 +147,7 @@ def build(days: int = 30) -> dict:
     return {
         "window_days": days,
         "from": start.date().isoformat(),
-        "to": now.date().isoformat(),
+        "to": end.date().isoformat(),
         "sales": {
             "created_paise": created_total,
             "captured_paise": captured_total,

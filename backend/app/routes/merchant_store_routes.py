@@ -110,18 +110,67 @@ def catalog(q: str = "", max_price_inr: int = 0):
     return {
         "merchant": {"id": store.MERCHANT_ID, "name": store.MERCHANT_NAME},
         "count": len(items),
-        "products": [{
-            "id": i["id"],
-            "name": i["name"],
-            "category": i.get("category"),
-            "price_paise": i["price_paise"],
-            "price_inr": round(i["price_paise"] / 100, 2),
-            "stock": i.get("stock"),
-            "condition": i.get("condition"),
-            "description": i.get("description"),
-            "image": i.get("image"),
-            "attributes": i.get("attributes") or {},
-        } for i in items],
+        "terms": store.STORE_TERMS,
+        # The agent-readable shape: availability and inventory as separate
+        # facts, the merchant's declared delivery and returns windows, and
+        # what this store will accept from an agent. `image` is carried
+        # alongside rather than inside it — a data URI is for rendering, not
+        # for reasoning, and it dwarfs every other field in the payload.
+        "products": [{**store.agent_view(i),
+                      "id": i["id"],
+                      "price_inr": round(i["price_paise"] / 100, 2),
+                      "stock": i.get("stock"),
+                      "image": i.get("image")} for i in items],
+    }
+
+
+@router.get("/catalog/{product_id}")
+def catalog_item(product_id: str):
+    """
+    One product, in full, for an agent that has narrowed to a candidate.
+
+    A draft is a 404 here rather than a record with status=draft: the agent
+    catalogue is what is for sale, and a half-finished product being
+    discoverable is the exact failure the status field exists to prevent.
+    """
+    product = store.get_product(product_id)
+    if not product or (product.get("status") or "active") != "active":
+        raise HTTPException(status_code=404,
+                            detail="No such product is published for sale.")
+    return {**store.agent_view(product),
+            "id": product["id"],
+            "image": product.get("image"),
+            # What the shop has OBSERVED goes with it...
+            "complements": _complements(product_id),
+            # ...and what the merchant has actually APPROVED showing beside
+            # it. These are different claims: the first is the evidence, the
+            # second is a decision somebody made and can be audited.
+            "offer": store.live_offer(product_id)}
+
+
+def _complements(product_id: str) -> dict:
+    """
+    What the store has observed going with this product.
+
+    Folded into the product view because an agent assembling a basket should
+    not have to know that a second endpoint exists to find out. The basis
+    travels with it, so "bought together twice" and "filed under the same
+    heading" cannot be confused for one another.
+    """
+    try:
+        from app.growth import graph
+        rows = graph.complements(product_id, limit=3)
+    except Exception as exc:
+        return {"items": [], "note": f"The relationship graph is unavailable: {exc}"}
+    return {
+        "items": [{"product_id": r["id"], "name": r["name"],
+                   "price_paise": r["price_paise"],
+                   "basis": r["basis"], "support": r["support"],
+                   "why": r["why"]} for r in rows],
+        "note": ("`basis` matters: co_purchase was observed in this store's "
+                 "own orders, category_adjacency is an assumption from "
+                 "shared category and is not evidence anyone bought them "
+                 "together."),
     }
 
 
@@ -391,12 +440,63 @@ def fulfil(session_id: str, body: Fulfil):
 
 
 @router.get("/growth")
-def merchant_growth(days: int = 30):
-    """Growth for the storefront, over a window of days."""
+def merchant_growth(days: int = 30, start: str = "", end: str = ""):
+    """
+    Growth for the storefront, over a window.
+
+    `days` is a rolling window ending now. `start`/`end` (ISO dates) is a
+    fixed window someone picked off a calendar, and wins where both are
+    given — a range that ended last Tuesday must still end last Tuesday when
+    the page is reloaded on Thursday.
+    """
     return {
-        **growth_metrics.build(days),
+        **growth_metrics.build(days, start_date=start, end_date=end),
         "discoverability": growth_metrics.discoverability(),
     }
+
+
+@router.get("/analytics")
+def merchant_analytics(days: int = 30, start: str = "", end: str = ""):
+    """
+    The shop's numbers for a window, against the window before it.
+
+    Same two ways to ask as /merchant/growth: `days` for a rolling window,
+    `start`/`end` for one pinned to dates.
+    """
+    from app.merchant import analytics
+    return analytics.build(days, start_date=start, end_date=end)
+
+
+class Ask(BaseModel):
+    text: str
+
+
+@router.post("/ask")
+def merchant_ask(body: Ask):
+    """
+    The merchant command centre: one question in, one analysis out.
+
+    Every figure in the reply is computed from this shop's own records by
+    the same agents that populate the Growth pages. Nothing is phrased by a
+    language model — see the module docstring for why that is deliberate.
+    """
+    from app.merchant import advisor
+    answer = advisor.ask(body.text or "")
+    try:
+        log_decision(
+            action_type="merchant_question",
+            amount_paise=0,
+            decision="allowed",
+            reason=(f"Merchant asked: {(body.text or '')[:120]!r} — answered as "
+                    f"{answer.get('intent')} from "
+                    f"{len(answer.get('findings') or [])} finding(s) and "
+                    f"{len(answer.get('actions') or [])} proposed action(s)."),
+        )
+    except Exception:
+        # A question that cannot be logged is still a question worth
+        # answering; the log is the record, not the gate.
+        pass
+    return answer
 
 
 @router.post("/seed")
