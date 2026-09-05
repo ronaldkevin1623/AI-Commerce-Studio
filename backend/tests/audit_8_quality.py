@@ -106,22 +106,39 @@ from app.agent.catalog import search_catalog
 from app.agent.ebay_client import enrich_reviews
 
 items = search_catalog("sandisk 128gb pendrive", 200000)
-items = enrich_reviews(items, 8)
-quality.annotate(items)
 
-r = explain.choose(items, "value", budget_paise=200000,
-                   requirements=["sandisk", "128gb"])
-pick = r["product"]
-cheapest = min(items, key=lambda i: i.get("price_paise") or 0)
-print(f"    picked   Rs{pick['price_paise']/100:,.0f}  "
-      f"score {pick['quality']['score']}  {str(pick['name'])[:40]}")
-print(f"    cheapest Rs{cheapest['price_paise']/100:,.0f}  "
-      f"score {cheapest['quality']['score']}  {str(cheapest['name'])[:40]}")
-print(f"    reason: {r['reason'][:150]}")
+# A LIVE SUITE HAS TO SURVIVE THE MARKET BEING SHUT.
+#
+# eBay answering 429 to everything left this with an empty list, and the
+# next lines went straight into `min()` over it. The suite died with a
+# ValueError and reported NO RESULT, which is the least useful of the three
+# things it could have said: a reader cannot tell a broken ranker from a
+# rate-limited key. Skipping and saying why is a real outcome.
+if not items:
+    from app.agent.catalog import _search_ebay
+    limited = getattr(_search_ebay, "last_rate_limited", False)
+    print("    SKIPPED — no live listings came back"
+          + (" (eBay is rate limiting this key; its Browse quota resets at "
+             "midnight US/Pacific)" if limited else "")
+          + ". Nothing here is a fact about this repository, so nothing is "
+            "asserted.")
+else:
+    items = enrich_reviews(items, 8)
+    quality.annotate(items)
 
-check("The pick is within budget", pick["price_paise"] <= 200000)
-check("The pick is at least as good as the cheapest",
-      (pick["quality"]["score"] or 0) >= (cheapest["quality"]["score"] or 0))
+    r = explain.choose(items, "value", budget_paise=200000,
+                       requirements=["sandisk", "128gb"])
+    pick = r["product"]
+    cheapest = min(items, key=lambda i: i.get("price_paise") or 0)
+    print(f"    picked   Rs{pick['price_paise']/100:,.0f}  "
+          f"score {pick['quality']['score']}  {str(pick['name'])[:40]}")
+    print(f"    cheapest Rs{cheapest['price_paise']/100:,.0f}  "
+          f"score {cheapest['quality']['score']}  {str(cheapest['name'])[:40]}")
+    print(f"    reason: {r['reason'][:150]}")
+
+    check("The pick is within budget", pick["price_paise"] <= 200000)
+    check("The pick is at least as good as the cheapest",
+          (pick["quality"]["score"] or 0) >= (cheapest["quality"]["score"] or 0))
 
 print("\n" + "=" * 62)
 print(f"  {len(PASS)} passed · {len(FAIL)} failed")

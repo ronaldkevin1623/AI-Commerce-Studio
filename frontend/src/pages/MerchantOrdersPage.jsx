@@ -20,6 +20,24 @@ const inr = (paise) =>
 // it is the next one — a shop cannot ship what it has not packed.
 const NEXT = { paid: "packed", packed: "shipped", shipped: "delivered" };
 
+// THE PAYMENT SIDE, WHICH IS NOT THE FULFILMENT SIDE.
+//
+// A checkout with no fulfilment state was printed as "awaiting payment"
+// regardless of what had actually happened to it, because the label keyed
+// off `fulfilment_state` alone and never read `status`. A CANCELLED
+// checkout therefore sat in the list looking like a live order waiting for
+// the buyer to pay — on a page whose own subtitle promises "only mark what
+// has actually happened".
+//
+// Anything not listed here falls through to the raw status rather than a
+// friendly guess: an unknown state should look unknown, not invented.
+const PAYMENT = {
+  awaiting_payment: { label: "awaiting payment", color: "text.disabled" },
+  cancelled: { label: "cancelled", color: "#EF4444" },
+  expired: { label: "expired", color: "#F59E0B" },
+  paid: { label: "paid \u2014 not yet fulfilled", color: "#60A5FA" },
+};
+
 const TONE = {
   paid: { label: "Paid", color: "#60A5FA", bg: "rgba(96,165,250,0.12)" },
   packed: { label: "Packed", color: "#A78BFA", bg: "rgba(167,139,250,0.12)" },
@@ -162,8 +180,16 @@ export default function MerchantOrdersPage() {
                           </Typography>
                         )}
                         {!stateKey && (
-                          <Typography variant="caption" sx={{ color: "text.disabled", fontSize: 11 }}>
-                            awaiting payment
+                          <Typography
+                            variant="caption"
+                            sx={{
+                              fontSize: 11,
+                              color: (PAYMENT[order.status] ?? {}).color
+                                     ?? "text.disabled",
+                            }}
+                          >
+                            {(PAYMENT[order.status] ?? {}).label
+                             ?? order.status ?? "awaiting payment"}
                           </Typography>
                         )}
                       </Stack>

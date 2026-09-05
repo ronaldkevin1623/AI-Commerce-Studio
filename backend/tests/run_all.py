@@ -36,6 +36,23 @@ import sys
 import time
 from pathlib import Path
 
+# THE RUNNER HAS TO SURVIVE PRINTING WHAT THE SUITES SAY.
+#
+# Child output is already captured as UTF-8. This is the other end: on
+# Windows `sys.stdout` defaults to cp1252, which has no U+2192. A suite
+# that failed with an arrow in its message therefore killed the RUNNER
+# mid-summary instead of reporting the failure — three real failures were
+# invisible for an hour because of it, and the totals line above them was
+# fine only because cp1252 happens to have the middle dot.
+#
+# `errors="replace"` as well as the encoding: a summary that degrades one
+# glyph to "?" is a working report, and a report that raises is not.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 HERE = Path(__file__).resolve().parent
 BACKEND = HERE.parent
 

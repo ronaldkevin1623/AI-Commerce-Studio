@@ -64,7 +64,48 @@ REGISTRY = BACKEND / ".bindings"
 # unstuck by waiting rather than only by deleting a file.
 MAX_ENTRY_AGE = 24 * 60 * 60
 
-DEFAULT_EMULATOR_HOST = "127.0.0.1:8085"
+FIREBASE_CONFIG = BACKEND / "firebase.json"
+
+# The Firestore emulator's own default, used when the config says nothing.
+# It is what the CLI falls back to, so falling back to the same value keeps
+# the two in step even when there is no config at all.
+FALLBACK_EMULATOR_HOST = "127.0.0.1:8080"
+
+
+def _configured_emulator_host() -> str:
+    """
+    Where the emulator will actually be, read from firebase.json.
+
+    ONE SOURCE OF TRUTH, BECAUSE TWO OF THEM SILENTLY DISAGREED.
+
+    This was a hard-coded "127.0.0.1:8085" sitting beside a firebase.json
+    that also declared 8085 — the same number written twice, which is fine
+    right up until one of them is not what happens. The CLI only finds
+    firebase.json if it is launched from a directory that can see it, and
+    when it cannot it warns
+
+        Could not find config (firebase.json) so using defaults
+
+    and starts on 8080 instead. The app then probed 8085, found nothing,
+    and reported the emulator as down while it was running perfectly well
+    one port over — a diagnostic that sends you to look at the wrong thing,
+    which is exactly what this module exists to prevent.
+
+    Reading the config means the app cannot hold an opinion the emulator
+    does not share. If the file is missing or malformed we take the CLI's
+    own default, because that is what the CLI will have done too.
+    """
+    try:
+        raw = json.loads(FIREBASE_CONFIG.read_text(encoding="utf-8"))
+        firestore = (raw.get("emulators") or {}).get("firestore") or {}
+        host = str(firestore.get("host") or "127.0.0.1")
+        port = int(firestore.get("port") or 8080)
+        return f"{host}:{port}"
+    except Exception:
+        return FALLBACK_EMULATOR_HOST
+
+
+DEFAULT_EMULATOR_HOST = _configured_emulator_host()
 
 
 def _die(title: str, lines: list[str]) -> None:
@@ -186,6 +227,39 @@ def _require_emulator_running(host: str = DEFAULT_EMULATOR_HOST) -> None:
         pass
     finally:
         probe.close()
+    # AN EMULATOR ON THE WRONG PORT LOOKS EXACTLY LIKE NO EMULATOR.
+    #
+    # Worth the two extra probes: "not running" sends you to start one,
+    # and if the real problem is that a running emulator is on a port this
+    # process is not looking at, that advice wastes the next ten minutes
+    # and can end with a second emulator fighting the first.
+    elsewhere = []
+    for candidate in ("127.0.0.1:8080", "127.0.0.1:8085"):
+        if candidate == host:
+            continue
+        other = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        other.settimeout(0.6)
+        try:
+            if other.connect_ex((candidate.split(":")[0],
+                                 int(candidate.split(":")[1]))) == 0:
+                elsewhere.append(candidate)
+        except Exception:
+            pass
+        finally:
+            other.close()
+
+    found = []
+    if elsewhere:
+        found = [
+            "",
+            f"NOTE: something IS listening on {', '.join(elsewhere)}.",
+            "",
+            "That is usually an emulator started before this port was",
+            f"settled. This process reads {FIREBASE_CONFIG.name} and expects",
+            f"{host}. Stop that emulator with Ctrl+C in its own window so it",
+            "exports your data, then start it again with the command above.",
+        ]
+
     _die(f"the Firestore emulator is not running on {host}", [
         "This project uses the local emulator by default, so there is no",
         "daily quota and no cloud dependency while you build.",
@@ -196,7 +270,7 @@ def _require_emulator_running(host: str = DEFAULT_EMULATOR_HOST) -> None:
         "",
         "It imports firebase-export/ on start and writes it back on exit,",
         "so your demo data survives a restart.",
-    ])
+    ] + found)
 
 
 def resolve_binding() -> str:

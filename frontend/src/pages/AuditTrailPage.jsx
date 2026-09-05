@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { Box, Typography, Button } from "@mui/material";
 import DownloadIcon from "@mui/icons-material/Download";
 
-import { useFirestoreAudit } from "../hooks/useFirestoreAudit";
+import { fetchAllDecisions, useFirestoreAudit } from "../hooks/useFirestoreAudit";
 import PageBanner from "../components/shared/PageBanner";
 import FilterBar from "../components/audit/FilterBar";
 import LogConsole from "../components/audit/LogConsole";
@@ -34,6 +34,25 @@ export default function AuditTrailPage() {
   // live — so the refresh control exists to say "you are looking at now",
   // not to fetch. It re-runs the client-side window instead of pretending.
   const [, setTick] = useState(0);
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState(null);
+
+  // The button reads the whole collection rather than exporting the fifty
+  // rows the page is holding. It can fail — it is a network call, unlike
+  // the old version — and a failed export has to say so rather than
+  // silently hand over a shorter file.
+  const exportEverything = async () => {
+    setExporting(true);
+    setExportError(null);
+    try {
+      const all = await fetchAllDecisions();
+      exportToCSV(all);
+    } catch (err) {
+      setExportError(err?.message || String(err));
+    } finally {
+      setExporting(false);
+    }
+  };
 
   const filtered = useMemo(() => {
     if (activeFilter === "all") return decisions;
@@ -50,16 +69,26 @@ export default function AuditTrailPage() {
             variant="outlined"
             size="small"
             startIcon={<DownloadIcon />}
-            onClick={() => exportToCSV(decisions)}
-            disabled={decisions.length === 0}
+            onClick={exportEverything}
+            disabled={exporting || decisions.length === 0}
             sx={{ borderColor: "rgba(255,255,255,0.2)" }}
           >
-            Export log
+            {exporting ? "Reading the log…" : "Export log"}
           </Button>
         }
       />
 
       <Box sx={{ maxWidth: 1220, mx: "auto", px: 3, py: 4 }}>
+        {exportError && (
+          <Typography
+            variant="body2"
+            sx={{ color: "error.main", mb: 2, lineHeight: 1.7 }}
+          >
+            The log could not be exported in full: {exportError}. Nothing was
+            downloaded — a partial audit file is worse than none, because it
+            reads as a complete one.
+          </Typography>
+        )}
         {loading ? (
           <Typography variant="body2" color="text.secondary">Connecting to live log…</Typography>
         ) : error ? (

@@ -110,15 +110,27 @@ quality.annotate(kept)
 r = explain.choose(kept, effective_priority(intent["priority"]),
                    intent["max_price_paise"], intent["requirements"])
 pick = r["product"]
-print(f"    picked Rs{pick['price_paise']/100:,.0f} — {str(pick['name'])[:56]}")
 
-check("The pick is not a case or cover",
-      not is_accessory_for(pick["name"], q), pick["name"][:60])
-check("The pick is a meaningful share of the stated budget",
-      pick["price_paise"] >= intent["max_price_paise"] * 0.5,
-      f"Rs{pick['price_paise']/100:,.0f} of Rs{intent['max_price_paise']/100:,.0f}")
-check("The pick is still within budget",
-      pick["price_paise"] <= intent["max_price_paise"])
+# Nothing survived, so there is nothing to assert about the pick. The old
+# code subscripted None here and killed the suite; a live market that
+# answered nothing is a fact about the market, not a failure of the code.
+if not pick:
+    from app.agent.catalog import _search_ebay
+    limited = getattr(_search_ebay, "last_rate_limited", False)
+    print("    SKIPPED — nothing survived the screens"
+          + (" (eBay is rate limiting this key)" if limited else "")
+          + ", so there is no pick to assert on.")
+else:
+    print(f"    picked Rs{pick['price_paise']/100:,.0f} — {str(pick['name'])[:56]}")
+
+    check("The pick is not a case or cover",
+          not is_accessory_for(pick["name"], q), pick["name"][:60])
+    check("The pick is a meaningful share of the stated budget",
+          pick["price_paise"] >= intent["max_price_paise"] * 0.5,
+          f"Rs{pick['price_paise']/100:,.0f} of "
+          f"Rs{intent['max_price_paise']/100:,.0f}")
+    check("The pick is still within budget",
+          pick["price_paise"] <= intent["max_price_paise"])
 
 print("\n" + "=" * 62)
 print(f"  {len(PASS)} passed · {len(FAIL)} failed")

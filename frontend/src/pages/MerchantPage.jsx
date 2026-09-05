@@ -233,7 +233,7 @@ export default function MerchantPage() {
 
             <Card
               title="Total sales breakdown"
-              help="Gross less what was given away and returned, plus anything carried on the listing."
+              help="Gross, less the discounts customers actually redeemed and anything returned, plus anything carried on the listing."
             >
               <Stack spacing={0}>
                 {data.breakdown.map((row) => (

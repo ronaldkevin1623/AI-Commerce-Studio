@@ -72,12 +72,22 @@ export default function AttributionPanel({ card }) {
 
       {/* Cost and return at the same weight. Putting the margin in small
           print is how an attributed number starts reading as a profit. */}
-      <Box sx={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 2, mb: 2 }}>
+      {/* COMMITTED IS NOT REDEEMED.
+          "Margin given away" was showing the committed figure, which reads
+          as money already gone. It is not: an offer costs the merchant
+          nothing until a customer takes it, which is exactly what the
+          agents promise when they propose one. Both numbers are shown
+          because the gap between them is the useful part — committed is
+          what the budget is holding, redeemed is what a sale actually
+          cost. */}
+      <Box sx={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 2, mb: 2 }}>
         {[
           { label: "Attributed revenue", value: inr(earned),
             colour: earned ? "#4ADE80" : "text.disabled" },
-          { label: "Margin given away", value: inr(d.margin_spent_paise),
+          { label: "Margin committed", value: inr(d.margin_spent_paise),
             colour: d.margin_spent_paise ? "#FBBF24" : "text.disabled" },
+          { label: "Margin redeemed", value: inr(d.margin_redeemed_paise),
+            colour: d.margin_redeemed_paise ? "#FBBF24" : "text.disabled" },
           { label: "Actions applied", value: String(d.actions_applied),
             colour: "text.primary" },
         ].map((tile) => (

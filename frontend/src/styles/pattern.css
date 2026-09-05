@@ -1,16 +1,33 @@
 /*
- * The background the app sits on — a fine graph-paper grid.
+ * THE GROUND THE APP SITS ON.
  *
- * Plain CSS rather than the styled-components version supplied: that library
- * is not a dependency here, and adding a runtime CSS-in-JS engine to draw one
- * static background would be a poor trade. The declarations below are the
- * ones from that snippet, unchanged — same colour, same two crossed
- * gradients, same 55px cell.
+ * What was here before was graph paper: 55px cells drawn in
+ * rgba(114,114,114,0.3) — a mid grey at nearly a third opacity — over
+ * #191a1a, which is itself lighter than the theme's own #0A0A0B. Two
+ * problems, and they compounded. The lines were strong enough to read as
+ * content, so the eye kept finding them behind the chat; and the ground was
+ * paler than every surface sitting on it, so panels looked like they had
+ * been cut out of the page rather than raised off it.
  *
- * Fixed behind everything at z-index 0 and pointer-events: none, so it can
- * never intercept a click or move the layout of what sits on top. The bar,
- * the sidebar and every card keep their own opaque surfaces, so the grid
- * shows through only where the app is empty — which is where it was wanted.
+ * This replaces it with four layers, in order back to front:
+ *
+ *   base       the theme's own ink, with a barely-there vertical lift so
+ *              the viewport has a top and a bottom
+ *   glows      two large, very low-opacity washes that drift (see
+ *              Pattern.jsx — the motion lives there, the geometry here)
+ *   grid       the same idea as before at about a tenth the contrast, and
+ *              masked so it fades out rather than tiling to the edges
+ *   vignette   a soft darkening at the rim that seats the content
+ *
+ * THE RULE THIS WHOLE FILE FOLLOWS
+ *
+ * The moment you can point at it and call it "the background", it is too
+ * strong. Everything here is under 6% opacity for that reason. It is meant
+ * to be noticed as depth, not as a pattern.
+ *
+ * Inert throughout: fixed, pointer-events: none, z-index 0. The bar, the
+ * sidebar and every card keep their own opaque surfaces, so this shows only
+ * where the app is empty — which is where it was wanted.
  */
 
 .pattern-backdrop {
@@ -18,15 +35,95 @@
   inset: 0;
   z-index: 0;
   pointer-events: none;
+  overflow: hidden;
+  /* The theme's background.default. Matching it rather than choosing a
+     lighter grey is what stops the panels reading as holes. */
+  background-color: #0a0a0b;
+}
 
-  --color: rgba(114, 114, 114, 0.3);
-  background-color: #191a1a;
+.pattern-backdrop > * {
+  position: absolute;
+  pointer-events: none;
+}
+
+/* ── Base ──────────────────────────────────────────────────────────────
+   A single soft lift toward the theme's SURFACE at the top. Not a colour
+   in its own right — it exists so the eye can tell up from down on an
+   otherwise flat near-black field. */
+.pattern-base {
+  inset: 0;
+  background:
+    linear-gradient(180deg,
+      rgba(255, 255, 255, 0.026) 0%,
+      rgba(255, 255, 255, 0.008) 34%,
+      rgba(255, 255, 255, 0) 68%);
+}
+
+/* ── Glows ─────────────────────────────────────────────────────────────
+   Radial gradients rather than a blurred solid: a `filter: blur()` over a
+   layer this size is a real per-frame cost on a page that is already
+   running a chat, and a radial gradient is soft for free.
+
+   Sized well past the viewport and anchored off its edges, so the drift in
+   Pattern.jsx can never bring a hard edge into view. Only `transform` is
+   animated, so these composite on the GPU and never trigger layout. */
+.pattern-glow {
+  width: 92vw;
+  height: 92vh;
+  will-change: transform;
+}
+
+/* The agent's own colour, from the theme's primary. Top-left, where the
+   sidebar and the first thing on any page live. */
+.pattern-glow--primary {
+  top: -34vh;
+  left: -22vw;
+  background: radial-gradient(closest-side,
+    rgba(79, 141, 247, 0.075),
+    rgba(79, 141, 247, 0.022) 46%,
+    transparent 72%);
+}
+
+/* The theme's success green, bottom-right and weaker still. Two hues at
+   opposite corners give the field a direction; a single one just looks
+   like a smudge. Kept under half the strength of the blue because green
+   carries meaning elsewhere in this app and should not start meaning
+   something here. */
+.pattern-glow--accent {
+  right: -30vw;
+  bottom: -40vh;
+  background: radial-gradient(closest-side,
+    rgba(63, 185, 80, 0.05),
+    rgba(63, 185, 80, 0.014) 44%,
+    transparent 70%);
+}
+
+/* ── Grid ──────────────────────────────────────────────────────────────
+   The texture that was asked for, kept and quietened. 1px lines at 2.6%
+   instead of 30%, on a 44px cell instead of 55px: finer and fainter reads
+   as surface, coarser and stronger reads as paper.
+
+   The mask is the other half of the fix. A grid that tiles edge to edge is
+   a pattern; one that falls away is a ground. It is strongest under the
+   top of the page and gone by the bottom, which is also where the content
+   is densest and least wants competition. */
+.pattern-grid {
+  inset: 0;
   background-image:
-    linear-gradient(0deg, transparent 24%, var(--color) 25%, var(--color) 26%,
-      transparent 27%, transparent 74%, var(--color) 75%, var(--color) 76%,
-      transparent 77%, transparent),
-    linear-gradient(90deg, transparent 24%, var(--color) 25%, var(--color) 26%,
-      transparent 27%, transparent 74%, var(--color) 75%, var(--color) 76%,
-      transparent 77%, transparent);
-  background-size: 55px 55px;
+    linear-gradient(rgba(255, 255, 255, 0.026) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.026) 1px, transparent 1px);
+  background-size: 44px 44px;
+  -webkit-mask-image: radial-gradient(125% 105% at 50% -8%, #000 34%, transparent 88%);
+  mask-image: radial-gradient(125% 105% at 50% -8%, #000 34%, transparent 88%);
+}
+
+/* ── Vignette ──────────────────────────────────────────────────────────
+   Last, over everything else, so it darkens the glows and the grid at the
+   rim together. Without it the drifting washes brighten the corners, which
+   is exactly where a wide display has the least content to justify it. */
+.pattern-vignette {
+  inset: 0;
+  background: radial-gradient(120% 95% at 50% 42%,
+    transparent 38%,
+    rgba(0, 0, 0, 0.42) 100%);
 }

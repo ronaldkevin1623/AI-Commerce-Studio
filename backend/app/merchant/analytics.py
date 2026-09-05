@@ -295,6 +295,30 @@ def _cohorts(sales, end, months_back: int = 8) -> dict:
 
     sizes = [r["size"] for r in rows if r["size"]]
     biggest = max(sizes) if sizes else 0
+
+    # WHERE THE MONTHS IN THIS GRID CAME FROM.
+    #
+    # A retention grid is the most authoritative-looking thing on an
+    # analytics page: five consecutive 100% cells reads as five months of a
+    # real customer coming back. Here that row is one seeded customer whose
+    # orders were written with backdated timestamps, and the page said so
+    # only in a different card about payments. Somebody reading the grid on
+    # its own would take the shape at face value, and the shape is the
+    # seed's rather than the shop's.
+    #
+    # The sample-size caveat below was already honest about `n`. This is the
+    # other half: honest about the calendar.
+    paid_rows = [r for r in sales if r.get("paid")]
+    real_rows = [r for r in paid_rows if r.get("settled_for_real")]
+    seeded = len(paid_rows) - len(real_rows)
+    provenance = (
+        f" {seeded} of the {len(paid_rows)} orders behind this grid are "
+        f"seeded or simulated history with backdated dates, and "
+        f"{len(real_rows)} settled through Razorpay for real \u2014 so the "
+        f"months shown are the seed's, not a trading record."
+        if seeded else ""
+    )
+
     return {
         "months": months,
         "month_labels": [_month_label(m) for m in months],
@@ -304,10 +328,10 @@ def _cohorts(sales, end, months_back: int = 8) -> dict:
             f"Cohorts are built from first paid order. The largest here has "
             f"{biggest} customer{'' if biggest == 1 else 's'}, so every "
             f"percentage in the grid is one customer's decision — read it as "
-            f"a shape, not a rate."
+            f"a shape, not a rate." + provenance
             if biggest and biggest < 5 else
             "Each row is everyone whose first paid order landed in that month, "
-            "and each cell is the share of them who bought again."
+            "and each cell is the share of them who bought again." + provenance
         ),
     }
 
@@ -350,25 +374,45 @@ def build(days: int = 30, start_date=None, end_date=None) -> dict:
     reversals = 0
     order_count = prior_orders = 0
     paid_count = 0
+    # Everything that reached this window, paid or not. Only used for the
+    # "never paid" note — it is the denominator of a disclosure, not of a
+    # revenue figure.
+    placed_count = 0
     real_settled = 0
     by_channel = collections.Counter()
     by_product = collections.Counter()
     product_units = collections.Counter()
     customers = collections.Counter()
 
+    # ONLY PAID ROWS BECOME SALES.
+    #
+    # `_collect` carries a `paid` flag on every row precisely so this can be
+    # decided here, and for a long time it was computed and then ignored:
+    # gross, order count, channels and products all counted everything that
+    # reached the window. The result was a "Total sales" figure containing
+    # abandoned carts, a CANCELLED checkout and an unpaid trip — 65% of the
+    # headline, on a dashboard whose footnote sat directly underneath
+    # saying "4 of 7 orders in this window were never paid".
+    #
+    # An unpaid checkout is a thing that might become a sale. It is not one
+    # yet, and a report that counts it has stopped being a report. The
+    # abandonment is not lost by this — it is exactly what the recovery
+    # agent reads, and the note below still counts it.
     for row in sales:
         when = row["at"]
         if current.holds(when):
+            placed_count += 1
+            if not row["paid"]:
+                continue
             current.add(when, row["amount_paise"])
             gross += row["amount_paise"]
             shipping += row["shipping_paise"]
             order_count += 1
+            paid_count += 1
             if row["refunded"]:
                 reversals += row["amount_paise"]
-            if row["paid"]:
-                paid_count += 1
-                if row["customer"]:
-                    customers[row["customer"]] += 1
+            if row["customer"]:
+                customers[row["customer"]] += 1
             if row["settled_for_real"]:
                 real_settled += 1
             by_channel[row["channel"]] += row["amount_paise"]
@@ -376,23 +420,41 @@ def build(days: int = 30, start_date=None, end_date=None) -> dict:
                 by_product[item["name"]] += item["amount_paise"]
                 product_units[item["name"]] += 1
         elif previous.holds(when):
+            # The comparison window is filtered the same way, or the delta
+            # would measure a change in how sales are counted rather than a
+            # change in the business.
+            if not row["paid"]:
+                continue
             previous.add(when, row["amount_paise"])
             prior_gross += row["amount_paise"]
             prior_orders += 1
 
-    # Margin given away by the growth agents is this shop's only discount.
-    discounts = prior_discounts = 0
+    # MARGIN GIVEN AWAY IS THIS SHOP'S ONLY DISCOUNT — BUT ONLY ONCE TAKEN.
+    #
+    # This used to sum every `growth_applied` decision in the window, which
+    # counted an offer the moment it was APPLIED. An applied offer is
+    # committed margin, not a discount on a sale: the agents say so when
+    # they propose one — "costing X of margin if it is taken, and nothing
+    # if it is not". Offers sitting on carts nobody has paid for were being
+    # subtracted from net sales, and a run of the test suite could drag the
+    # headline down by thousands of rupees for discounts that never
+    # happened.
+    #
+    # Redeemed margin is attributed to the window the SALE fell in, not the
+    # window the offer was created in, because that is when the money moved.
+    # What was merely committed still has a home — the growth section's
+    # budget view, where "spent today" is exactly the right question.
+    from app.growth import attribution
+    discounts = attribution.redeemed_between(
+        current.start.timestamp(), current.end.timestamp())
+    prior_discounts = attribution.redeemed_between(
+        previous.start.timestamp(), previous.end.timestamp())
+
     funnel_counts = collections.Counter()
     for row in _decisions():
         when = _as_datetime(row.get("timestamp"))
-        action = row.get("action_type")
-        if action == "growth_applied":
-            if current.holds(when):
-                discounts += int(row.get("amount_paise") or 0)
-            elif previous.holds(when):
-                prior_discounts += int(row.get("amount_paise") or 0)
         if current.holds(when):
-            funnel_counts[action] += 1
+            funnel_counts[row.get("action_type")] += 1
 
     searches = sum(1 for s in _scans() if current.holds(_as_datetime(s.get("timestamp"))))
 
@@ -498,8 +560,9 @@ def build(days: int = 30, start_date=None, end_date=None) -> dict:
         },
         "notes": [
             note for note in [
-                (f"{order_count - paid_count} of {order_count} orders in this window "
-                 f"were never paid.") if order_count > paid_count else None,
+                (f"{placed_count - paid_count} of {placed_count} checkouts in "
+                 f"this window were never paid, so they are not counted as "
+                 f"sales above.") if placed_count > paid_count else None,
                 (f"Only {real_settled} of {paid_count} paid orders settled through "
                  f"Razorpay for real; the rest are seeded or simulated and are "
                  f"labelled as such rather than filtered out.")

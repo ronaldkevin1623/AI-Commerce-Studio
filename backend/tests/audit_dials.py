@@ -20,7 +20,18 @@ sys.path.insert(0, str(BACKEND))
 os.chdir(BACKEND)
 sys.stdout.reconfigure(encoding="utf-8")
 
+import dial_guard
+
 from app.agent import settings
+
+# Every node, because this suite turns nearly all of them, and because
+# the cleanup at the foot of the file used to be a bare
+# `settings.reset()` — which restores DEFAULTS across the whole spec,
+# not the values it found. Run that and a merchant's risk limits, growth
+# caps and autonomy switches all silently revert. The snapshot taken
+# here is what goes back, and it goes back even if an assertion below
+# raises first.
+dial_guard.protect()
 from app.agent import trust_agent, budget_agent, risk_gate
 
 PASS, FAIL = "PASS", "FAIL"
@@ -206,7 +217,11 @@ route_src = inspect.getsource(agent_routes)
 check("trust.drop_flagged", 'settings.get("trust", "drop_flagged")' in route_src,
       "read in agent_routes before the trusted-only filter")
 
-settings.reset()
+# Not settings.reset(): that restores the DEFAULTS across the whole spec,
+# which is a different act from undoing this suite. It would hand a
+# merchant back a Rs500 growth cap and an autonomy node they never
+# touched. What goes back is what was there.
+dial_guard.restore()
 
 print()
 for status, name, detail in results:

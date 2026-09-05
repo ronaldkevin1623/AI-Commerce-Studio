@@ -281,6 +281,35 @@ def _settle_with_merchant(razorpay_order_id: str, payment_id: str) -> dict:
     order = order_by_razorpay_id(razorpay_order_id) or {}
     session_id = order.get("merchant_checkout_session")
     if not session_id:
+        # TWO REASONS TO HAVE NO SESSION, AND ONLY ONE IS A PROBLEM.
+        #
+        # Most orders here were bought at another venue. There is no
+        # merchant checkout to settle and never was, so this returns
+        # quietly — logging those would bury the trail in an entry that
+        # means "nothing happened, correctly".
+        #
+        # An order from THIS store with no session id is the other thing
+        # entirely: the shop sold the goods, the buyer paid, and the shop
+        # is never going to be told. It holds stock against a checkout that
+        # stays `awaiting_payment` forever, and the money is captured at
+        # Razorpay with nothing on the merchant side to match it against —
+        # the same shape as an unrecorded capture, which is precisely what
+        # the reconciliation audit exists to catch. Silence here is how a
+        # discrepancy becomes untraceable, so it is written down.
+        if (order.get("source") or "") == "merchant":
+            log_decision(
+                action_type="merchant_settlement_skipped",
+                amount_paise=int(order.get("amount_paise") or 0),
+                decision="flagged",
+                reason=(f"Capture {payment_id} settled for order "
+                        f"{razorpay_order_id}, which came from the merchant "
+                        f"store but carries no checkout session. The store "
+                        f"cannot be told this was paid, so its session stays "
+                        f"open and its stock stays held. Money moved; the "
+                        f"seller does not know."),
+                order_id=razorpay_order_id,
+                customer_id=order.get("customer_id"),
+            )
         return {}
 
     try:

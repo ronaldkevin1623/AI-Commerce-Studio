@@ -253,6 +253,11 @@ async def agent_pipeline(websocket: WebSocket):
         # Bound here because the screen only runs on a fresh search;
         # a refinement reuses listings already screened.
         screened = None
+        # How many listings the venues actually returned, before any screen
+        # ran. `candidates` is rebound by every stage, so by the time the
+        # ranker has finished it holds the survivors — counting it in a
+        # message about what was screened out reports zero out of zero.
+        fetched_count = 0
         # Same reason, and one more: the precision checkpoint below runs on
         # both paths, so this has to exist on both. A refinement re-shows
         # listings, sponsored ones included, and a card shown again is a
@@ -319,6 +324,7 @@ async def agent_pipeline(websocket: WebSocket):
             # person has already answered.
             narrowed = refiner.apply(previous["candidates"], decision["ops"])
             candidates = narrowed["candidates"]
+            fetched_count = len(candidates)
             placements = promotions.PlacementRun(candidates)
             sponsored_pool = [dict(c) for c in candidates if c.get("sponsored")]
             quantity = 1
@@ -405,6 +411,7 @@ async def agent_pipeline(websocket: WebSocket):
             # Before anything counts them: a relisted offer appearing twice
             # took two of the five places on screen.
             candidates = deduplicate(candidates)
+            fetched_count = len(candidates)
 
             # Follows any promoted candidates from here to the screen. It
             # only watches — every filter below runs on the same rules it
@@ -488,6 +495,19 @@ async def agent_pipeline(websocket: WebSocket):
                     )
                     await _agent(websocket, "scout", "blocked",
                                  "In stock, over budget", "warn", tools=["ebay"])
+                elif getattr(_ebay_stage, "last_rate_limited", False):
+                    # Not the shopper's fault and not fixable by rewording.
+                    message = (
+                        "eBay is rate limiting this project's API key right "
+                        "now, so the marketplace could not be searched at "
+                        "all — this is not a result about your request.\n\n"
+                        "The shop's own catalogue was still searched and had "
+                        "nothing matching either. eBay's Browse quota resets "
+                        "at midnight US/Pacific. Nothing was bought and "
+                        "nothing was charged."
+                    )
+                    await _agent(websocket, "scout", "blocked",
+                                 "eBay rate limited", "warn", tools=["ebay"])
                 else:
                     phrase = diagnosis.get("phrase") or intent["category"]
                     # What is certain, then what to do — without asserting a
@@ -739,6 +759,49 @@ async def agent_pipeline(websocket: WebSocket):
             bias=(intent.get("quality_bias") or "neutral").lower(),
         )
         product = result["product"]
+
+        # NOTHING SURVIVED THE SCREENS. THAT IS AN ANSWER.
+        #
+        # The guard further up covers the case where the venues returned
+        # nothing at all. This is the other one, and it was missing: listings
+        # WERE found and every screen — accessory, relevance, condition,
+        # trust, precision — took its share until none were left. The run
+        # then walked into `product["id"]` with product set to None and the
+        # shopper was shown `'NoneType' object is not subscriptable`.
+        #
+        # A raw TypeError is the worst possible way to say "nothing here
+        # answers that", and it is the most likely thing to happen on a small
+        # catalogue, which is exactly when somebody is watching.
+        if not product:
+            limited = False
+            try:
+                from app.agent.catalog import _search_ebay as _ebay_stage
+                limited = bool(getattr(_ebay_stage, "last_rate_limited", False))
+            except Exception:
+                pass
+
+            await _agent(websocket, "value", "blocked",
+                         result.get("reason") or "Nothing matched", "error",
+                         tools=["ollama"])
+            await _send(websocket, "error", (
+                (f"{fetched_count} listing"
+                 f"{'' if fetched_count == 1 else 's'} came back for "
+                 f"\"{search_text}\", and none of them survived the screens "
+                 f"for accessories, relevance, condition, trust and stock."
+                 if fetched_count else
+                 f"Nothing came back for \"{search_text}\" that could be "
+                 f"ranked.")
+                + ("\n\neBay is also rate limiting this project's API key "
+                   "right now, so the marketplace was not searched — only the "
+                   "shop's own catalogue was. Its quota resets at midnight "
+                   "US/Pacific." if limited else "")
+                + "\n\nNothing was bought and nothing was charged. Worth "
+                  "trying: drop a word to widen the search, name the brand "
+                  "and model, or raise the budget if you set one."
+            ))
+            await websocket.close()
+            return
+
         summary = result["reason"]
         # Kept so the next message can be "why that one" and get this
         # sentence back rather than a reconstruction of it.

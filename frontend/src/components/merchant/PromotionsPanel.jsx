@@ -95,45 +95,6 @@ export default function PromotionsPanel({ products = [] }) {
         otherwise have missed you.
       </Typography>
 
-      {/* The limits, first and in plain words. A merchant deciding what to
-          spend is entitled to know what is not for sale before they bid. */}
-      <Stack
-        direction={{ xs: "column", md: "row" }}
-        spacing={1.5}
-        sx={{ mb: 2.5 }}
-      >
-        <Box
-          sx={{
-            flex: 1, p: 1.5, borderRadius: 1.5, border: "1px solid",
-            borderColor: "rgba(34,197,94,0.35)", bgcolor: "rgba(34,197,94,0.06)",
-          }}
-        >
-          <Typography variant="caption" sx={{ fontWeight: 700, color: "success.main", display: "block", mb: 0.5 }}>
-            WHAT A PROMOTION BUYS
-          </Typography>
-          {(data?.buys ?? []).map((line) => (
-            <Typography key={line} variant="caption" sx={{ color: "text.secondary", display: "block", lineHeight: 1.7 }}>
-              · {line}
-            </Typography>
-          ))}
-        </Box>
-        <Box
-          sx={{
-            flex: 1, p: 1.5, borderRadius: 1.5, border: "1px solid",
-            borderColor: "rgba(239,68,68,0.3)", bgcolor: "rgba(239,68,68,0.05)",
-          }}
-        >
-          <Typography variant="caption" sx={{ fontWeight: 700, color: "error.main", display: "block", mb: 0.5 }}>
-            WHAT IT DOES NOT
-          </Typography>
-          {(data?.does_not_buy ?? []).map((line) => (
-            <Typography key={line} variant="caption" sx={{ color: "text.secondary", display: "block", lineHeight: 1.7 }}>
-              · {line}
-            </Typography>
-          ))}
-        </Box>
-      </Stack>
-
       <Stack
         component="form"
         onSubmit={submit}

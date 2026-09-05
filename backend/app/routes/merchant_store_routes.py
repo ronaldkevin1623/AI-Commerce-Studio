@@ -223,6 +223,10 @@ def open_checkout(
             reason=(
                 f"{store.MERCHANT_NAME} opened checkout {session['id']} for "
                 f"{len(session['line_items'])} line item(s)"
+                + (f". {session['discount_note']} "
+                   f"₹{session['discount_paise'] / 100:,.2f} came off a "
+                   f"₹{session['subtotal_paise'] / 100:,.2f} basket."
+                   if session.get("discount_paise") else "")
             ),
             order_id=order["id"],
         )
@@ -232,6 +236,13 @@ def open_checkout(
             "status": "awaiting_payment",
             "currency": "INR",
             "line_items": session["line_items"],
+            # Both figures, always. A total that is lower than the lines add
+            # up to needs the subtotal beside it or the buyer cannot check
+            # the arithmetic, and a discount nobody can check is a discount
+            # nobody should trust.
+            "subtotal_paise": session.get("subtotal_paise", session["total_paise"]),
+            "discount_paise": session.get("discount_paise", 0),
+            "discount_note": session.get("discount_note", ""),
             "total_paise": session["total_paise"],
             "razorpay_order_id": order["id"],
             "payment_handler": "com.razorpay",
@@ -385,6 +396,82 @@ def add_product(body: NewProduct):
     return product
 
 
+class EditProduct(BaseModel):
+    # Every field optional: an edit says what changed and nothing else, so
+    # a status flip does not have to resend the photo.
+    name: str | None = None
+    price_paise: int | None = None
+    stock: int | None = None
+    category: str | None = None
+    condition: str | None = None
+    description: str | None = None
+    image: str | None = None
+    status: str | None = None
+
+
+@router.patch("/products/{product_id}")
+def edit_product(product_id: str, body: EditProduct):
+    """Change a product, including publishing or unpublishing it."""
+    fields = {k: v for k, v in body.model_dump().items() if v is not None}
+    result = store.update_product(product_id, fields)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result["error"])
+
+    product = result["product"]
+    # PUBLISHING IS NOT A FIELD EDIT AND IS NOT LOGGED AS ONE.
+    #
+    # Every other change moves a number on a record. This one decides
+    # whether a buying agent can discover and check the thing out, so it
+    # gets its own action type and says so in words a person reading the
+    # trail later will understand.
+    if result.get("published"):
+        action, note = "merchant_product_published", (
+            f"{product['name']} published — it is now in the UCP catalogue "
+            f"and an AI buyer can discover and check it out.")
+    elif result.get("unpublished"):
+        action, note = "merchant_product_unpublished", (
+            f"{product['name']} moved back to draft — it has left the UCP "
+            f"catalogue and can no longer be discovered or bought.")
+    else:
+        action, note = "merchant_product_updated", (
+            f"{product['name']} edited: {', '.join(result['changed'])}.")
+
+    log_decision(
+        action_type=action,
+        amount_paise=int(product.get("price_paise") or 0),
+        decision="allowed",
+        reason=note,
+    )
+    return product
+
+
+@router.delete("/products/{product_id}")
+def remove_product(product_id: str):
+    """Remove a product, once nothing live depends on it."""
+    result = store.delete_product(product_id)
+    if not result.get("ok"):
+        # 409, not 400: the request is well formed, the shop's state is what
+        # says no. A merchant who cancels the checkout can send it again.
+        raise HTTPException(status_code=409, detail=result["error"])
+
+    product = result["product"]
+    retired = result.get("retired") or []
+    log_decision(
+        action_type="merchant_product_removed",
+        amount_paise=int(product.get("price_paise") or 0),
+        decision="allowed",
+        reason=(
+            f"{product.get('name')} removed from the catalogue "
+            f"(was {product.get('status')}, stock {product.get('stock')}, "
+            f"₹{int(product.get('price_paise') or 0) / 100:,.2f})."
+            + (f" Also retired: {', '.join(retired)}." if retired else "")
+            + " Past orders keep their own copy of the line, so nothing "
+              "already sold or reported has changed."
+        ),
+    )
+    return {"ok": True, "id": product_id, "retired": retired}
+
+
 class Fulfil(BaseModel):
     state: str
     carrier: str | None = None
@@ -469,6 +556,15 @@ def merchant_analytics(days: int = 30, start: str = "", end: str = ""):
 
 class Ask(BaseModel):
     text: str
+    # A product photo, as the data URI the console already produces for the
+    # product form. Optional, and only ever attached to something the
+    # merchant is creating.
+    image: str | None = None
+    # An action the agent had started and still needs fields for. Carried by
+    # the client rather than held in a server session: the half-built thing
+    # is visible in the payload, dies with the tab, and cannot be picked up
+    # by anyone else.
+    pending: dict | None = None
 
 
 @router.post("/ask")
@@ -481,7 +577,8 @@ def merchant_ask(body: Ask):
     language model — see the module docstring for why that is deliberate.
     """
     from app.merchant import advisor
-    answer = advisor.ask(body.text or "")
+    answer = advisor.ask(body.text or "", image=body.image,
+                         pending=body.pending)
     try:
         log_decision(
             action_type="merchant_question",

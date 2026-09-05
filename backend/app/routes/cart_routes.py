@@ -127,6 +127,33 @@ def _do_cart_checkout(req: CartCheckout, idempotency_key: str = None,
         if not priced.get("ok"):
             raise HTTPException(status_code=409, detail=priced["error"])
         total = priced["total_paise"]
+
+        # A GROWTH DISCOUNT IS PART OF THE PRICE, SO IT IS SUBTRACTED HERE.
+        #
+        # The seller applies the offer when it opens its own session, which
+        # would leave the gate approving one figure and the seller charging
+        # a lower one — and the mismatch check below, correctly, refuses
+        # that. The fix is not to loosen the check: it is to work out the
+        # real price before anything approves or signs it, so the risk
+        # gate, the cart mandate, the Razorpay order and the seller's
+        # session all describe the same number.
+        #
+        # Read-only here. The offer is not claimed until the seller opens
+        # the session, and that call recomputes the same discount from the
+        # same offer — so if it has been taken in between, the mismatch
+        # check catches it, which is exactly what it is for.
+        try:
+            from app.growth import redemption
+            entitled = redemption.find_for_basket(
+                [{"id": i.get("id"), "quantity": i.get("quantity")}
+                 for i in req.items],
+                {"customer_id": None})
+            if entitled:
+                total -= int(total * entitled["discount_pct"] / 100)
+        except Exception as exc:
+            # No discount is a correct outcome; a failed lookup must never
+            # stop a sale. The buyer pays the price they were shown.
+            print(f"[cart] growth discount not priced in: {exc}", flush=True)
     else:
         total = _total(req.items)
 
@@ -332,6 +359,30 @@ def _do_cart_checkout(req: CartCheckout, idempotency_key: str = None,
         # different one, the approval does not cover it — that is a
         # mandate-level failure, not a rounding difference to absorb.
         charged = checkout_session.get("total_paise")
+
+        # CHARGING LESS THAN WAS APPROVED IS INSIDE THE APPROVAL.
+        #
+        # The bound the gate and the mandate set is a ceiling, and a seller
+        # that comes in under it has not exceeded anything. It is still
+        # written down, because a price that moved between approval and
+        # order is worth a record either way — and because the only reason
+        # it should ever move down is a growth offer, which has its own
+        # entry beside this one.
+        if charged is not None and charged < total:
+            log_decision(
+                action_type="merchant_price_reduced",
+                amount_paise=charged,
+                decision="allowed",
+                reason=(f"Gate approved Rs{total/100:,.2f}; the merchant's "
+                        f"session is for Rs{charged/100:,.2f}. Less than the "
+                        f"approved ceiling, so the approval covers it."
+                        + (f" {checkout_session.get('discount_note')}"
+                           if checkout_session.get("discount_note") else "")),
+                customer_id=customer["id"],
+                order_id=checkout_session.get("razorpay_order_id"),
+            )
+            total = charged
+
         if charged != total:
             log_decision(
                 action_type="merchant_price_mismatch",
@@ -407,4 +458,11 @@ def _do_cart_checkout(req: CartCheckout, idempotency_key: str = None,
         "merchant_checkout_session": (checkout_session or {}).get("session_id"),
         "merchant_name": req.items[0].get("merchant_name") if from_merchant else None,
         "instrument_note": (checkout_session or {}).get("instrument_note"),
+        # What the basket was worth and what came off it. Both, always: a
+        # total lower than the lines add up to is unverifiable without the
+        # subtotal beside it, and a discount nobody can check is one nobody
+        # should trust.
+        "subtotal_paise": (checkout_session or {}).get("subtotal_paise") or total,
+        "discount_paise": (checkout_session or {}).get("discount_paise") or 0,
+        "discount_note": (checkout_session or {}).get("discount_note") or "",
     }

@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  Box, Button, Chip, CircularProgress, InputBase, Stack, Typography,
+  Box, Button, Chip, CircularProgress, IconButton, InputBase, Stack,
+  Tooltip, Typography,
 } from "@mui/material";
 import { Link } from "react-router-dom";
 import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome";
+import ImageOutlinedIcon from "@mui/icons-material/ImageOutlined";
+import CloseIcon from "@mui/icons-material/Close";
 import ArrowUpwardIcon from "@mui/icons-material/ArrowUpward";
 import ArrowForwardIcon from "@mui/icons-material/ArrowForward";
 import CheckCircleOutlineIcon from "@mui/icons-material/CheckCircleOutlineOutlined";
@@ -11,6 +14,22 @@ import ErrorOutlineIcon from "@mui/icons-material/ErrorOutlineOutlined";
 import LockOutlinedIcon from "@mui/icons-material/LockOutlined";
 
 import { API_BASE } from "../config";
+import { useVoice } from "../hooks/useVoice";
+import { MicButton, SpeakToggle } from "../components/shared/VoiceControls";
+import { compress } from "../components/merchant/MediaUpload";
+import TypedPlaceholder from "../components/shared/TypedPlaceholder";
+
+// Real things this agent can do — the reports it routes to and the actions
+// it can perform. A placeholder that suggested something it cannot answer
+// would be teaching the merchant to distrust it on their first message.
+const MERCHANT_PROMPTS = [
+  "add a product from a photo",
+  "compare this month to last month",
+  "find me an opportunity to increase revenue",
+  "show me what is going wrong",
+  "tell me which products are selling",
+  "give me a detailed report on revenue growth",
+];
 
 /**
  * THE MERCHANT COMMAND CENTRE.
@@ -342,6 +361,28 @@ export default function MerchantConsolePage() {
   const [text, setText] = useState("");
   const [turns, setTurns] = useState([]);
   const [busy, setBusy] = useState(false);
+
+  // ── Voice ─────────────────────────────────────────────────────────────
+  // Dictation writes into the same `text` state the keyboard does, so the
+  // question takes the identical path to the agent either way — there is no
+  // second, voice-shaped code path that could behave differently.
+  const [readAloud, setReadAloud] = useState(false);
+  const voice = useVoice({
+    onTranscript: (heard) => setText(heard),
+  });
+  // Destructured because `voice` is a new object every render while `speak`
+  // is a stable useCallback — depending on the object would rebuild `ask`
+  // on every keystroke, depending on nothing at all left it stale.
+  const { speak } = voice;
+
+  // A photo waiting to be sent with the next message, and an action the
+  // agent is still collecting fields for. `pending` comes straight back
+  // from the reply — the half-built product lives in this tab and nowhere
+  // else, so closing it abandons the action rather than leaving something
+  // half-made on the server.
+  const [photo, setPhoto] = useState(null);
+  const [pending, setPending] = useState(null);
+  const [attachError, setAttachError] = useState(null);
   const bottom = useRef(null);
 
   useEffect(() => {
@@ -358,10 +399,18 @@ export default function MerchantConsolePage() {
       const res = await fetch(`${API_BASE}/merchant/ask`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: asked }),
+        body: JSON.stringify({ text: asked, image: photo, pending }),
       });
       if (!res.ok) throw new Error(`Store returned ${res.status}`);
       const answer = await res.json();
+      // The SUMMARY only. Reading a whole report aloud — every table row,
+      // every caveat — is unusable, and truncating a financial figure mid
+      // sentence is worse than not speaking it at all.
+      if (readAloud && answer?.summary) speak(answer.summary);
+      // The agent says whether it still needs something. Null clears it,
+      // so a finished action cannot leak into the next question.
+      setPending(answer?.pending ?? null);
+      setPhoto(null);
       setTurns((prev) => {
         const next = [...prev];
         next[next.length - 1] = { question: asked, answer };
@@ -383,7 +432,11 @@ export default function MerchantConsolePage() {
     } finally {
       setBusy(false);
     }
-  }, [busy]);
+    // `readAloud` and `speak` belong here. Without them `ask` kept the
+    // values from the render where `busy` last changed — readAloud was
+    // false at mount, toggling it never changed `busy`, so the answer was
+    // never spoken and the toggle looked dead.
+  }, [busy, readAloud, speak, photo, pending]);
 
   const empty = turns.length === 0;
 
@@ -414,16 +467,204 @@ export default function MerchantConsolePage() {
         onSubmit={(e) => { e.preventDefault(); ask(text); }}
         sx={{ ...CARD, p: 1.5, mb: 2.5, position: "sticky", top: 0, zIndex: 2 }}
       >
+        {(photo || pending || attachError) && (
+          <Stack
+            direction="row"
+            spacing={1}
+            sx={{ alignItems: "center", px: 1, pb: 1, flexWrap: "wrap" }}
+          >
+            {photo && (
+              // THE PICTURE ITSELF, SMALL.
+              //
+              // "Photo attached" is a claim the merchant has to take on
+              // trust; a thumbnail is the thing they can check. It matters
+              // most where a paste went wrong — the wrong image, or a
+              // screenshot of the wrong window, is obvious at 32px and
+              // invisible in a text chip.
+              <Box
+                sx={{
+                  display: "inline-flex", alignItems: "center", gap: 0.75,
+                  pl: 0.5, pr: 0.75, py: 0.5, borderRadius: 1.5,
+                  border: "1px solid", borderColor: "divider",
+                  bgcolor: "rgba(255,255,255,0.03)",
+                }}
+              >
+                <Box
+                  component="img"
+                  src={photo}
+                  alt="Attached product photo"
+                  sx={{
+                    width: 32, height: 32, borderRadius: 1,
+                    objectFit: "cover", flexShrink: 0,
+                    // The shop's own products sit on light backgrounds; a
+                    // dark chrome behind a white-background photo makes the
+                    // edges read as ragged without it.
+                    bgcolor: "rgba(255,255,255,0.06)",
+                  }}
+                />
+                <Typography variant="caption" sx={{ fontSize: 11, color: "text.secondary" }}>
+                  attached
+                </Typography>
+                <IconButton
+                  size="small"
+                  onClick={() => setPhoto(null)}
+                  aria-label="Remove the attached photo"
+                  sx={{ width: 20, height: 20, color: "text.disabled" }}
+                >
+                  <CloseIcon sx={{ fontSize: 13 }} />
+                </IconButton>
+              </Box>
+            )}
+            {pending && (
+              <Typography variant="caption" sx={{ color: "#FBBF24", fontSize: 11.5 }}>
+                Still collecting: {String(pending.action).replace(/_/g, " ")}.
+                Nothing has changed in your store yet.
+              </Typography>
+            )}
+            {pending && (
+              <Chip
+                size="small"
+                variant="outlined"
+                label="Cancel"
+                onClick={() => setPending(null)}
+                sx={{ fontSize: 11, height: 24 }}
+              />
+            )}
+            {attachError && (
+              <Typography variant="caption" sx={{ color: "error.main", fontSize: 11.5 }}>
+                {attachError}
+              </Typography>
+            )}
+          </Stack>
+        )}
+
         <Stack direction="row" spacing={1.5} sx={{ alignItems: "flex-end" }}>
+          <Box sx={{ flex: 1, position: "relative", minWidth: 0 }}>
+            {/* Behind the input, and only while it is empty and idle. */}
+            <TypedPlaceholder
+              prefix="Ask the agent to "
+              phrases={MERCHANT_PROMPTS}
+              active={!text && !busy && !voice.listening}
+              sx={{
+                position: "absolute",
+                left: 8,
+                top: 4,
+                right: 8,
+                fontSize: 14.5,
+                lineHeight: 1.5,
+              }}
+            />
           <InputBase
             value={text}
             onChange={(e) => setText(e.target.value)}
-            placeholder="Find me an opportunity to increase revenue"
+            // Kept, and deliberately plain: this is what a screen reader
+            // announces. The typed version above is aria-hidden decoration.
+            placeholder={text ? "" : " "}
             multiline
             maxRows={4}
             disabled={busy}
-            sx={{ flex: 1, fontSize: 14.5, px: 1, py: 0.5 }}
+            // ENTER SENDS. SHIFT+ENTER KEEPS THE NEWLINE.
+            //
+            // `multiline` makes this a <textarea>, and a textarea does not
+            // submit its form on Enter — it inserts a line break. So the
+            // arrow worked and the key everyone actually presses did
+            // nothing but grow the box. The form's onSubmit is left alone
+            // and still handles the button; this only adds the keyboard.
+            //
+            // `e.target.value` rather than `text`: typing quickly or
+            // pasting and hitting Enter in the same tick means React has
+            // not re-rendered, so the closed-over state is still the
+            // previous value. Reading the live DOM value sends what is on
+            // screen. Same reason the buyer console's PromptBar does it.
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                ask(e.target.value);
+              }
+            }}
+            // PASTE A PHOTO STRAIGHT IN.
+            //
+            // A screenshot or a copied product image is how somebody
+            // actually has a picture to hand — reaching for a file picker
+            // means saving it somewhere first. The buyer console has done
+            // this all along; the merchant box was the odd one out.
+            //
+            // `preventDefault` only when an image is actually found, so
+            // pasting ordinary text still behaves like pasting text.
+            onPaste={async (e) => {
+              const file = [...(e.clipboardData?.items ?? [])]
+                .find((i) => i.type.startsWith("image/"))
+                ?.getAsFile();
+              if (!file) return;
+              e.preventDefault();
+              setAttachError(null);
+              try {
+                setPhoto(await compress(file));
+              } catch (err) {
+                setAttachError(err?.message || "That image could not be read.");
+              }
+            }}
+            sx={{ width: "100%", fontSize: 14.5, px: 1, py: 0.5,
+                  position: "relative", zIndex: 1,
+                  "& textarea::placeholder": { opacity: 0 } }}
           />
+          </Box>
+          {/* Attach a photo. Staged, not uploaded: it travels with the next
+              message so the merchant can say what the thing is in the same
+              breath. */}
+          <Tooltip title="Attach a product photo" placement="top">
+            <IconButton
+              component="label"
+              disabled={busy}
+              aria-label="Attach a product photo"
+              sx={{
+                width: 40, height: 40, borderRadius: 2,
+                color: photo ? "#4ADE80" : "text.secondary",
+                bgcolor: photo ? "rgba(74,222,128,0.12)" : "transparent",
+                "&:hover": { bgcolor: "rgba(255,255,255,0.06)" },
+              }}
+            >
+              <ImageOutlinedIcon sx={{ fontSize: 19 }} />
+              <input
+                type="file"
+                accept="image/*"
+                hidden
+                onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  e.target.value = "";
+                  if (!file) return;
+                  setAttachError(null);
+                  try {
+                    setPhoto(await compress(file));
+                  } catch (err) {
+                    // Say so rather than staging nothing and looking ready.
+                    setAttachError(err?.message || "That image could not be read.");
+                  }
+                }}
+              />
+            </IconButton>
+          </Tooltip>
+
+          {voice.canDictate && (
+            <MicButton
+              listening={voice.listening}
+              onStart={voice.startDictation}
+              onStop={voice.stopDictation}
+              disabled={busy}
+              size={40}
+            />
+          )}
+          {voice.canSpeak && (
+            <SpeakToggle
+              enabled={readAloud}
+              speaking={voice.speaking}
+              onToggle={() => {
+                if (readAloud) voice.stopSpeaking();
+                setReadAloud((on) => !on);
+              }}
+              size={40}
+            />
+          )}
           <Button
             type="submit"
             disabled={busy || !text.trim()}

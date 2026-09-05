@@ -169,6 +169,7 @@ def _search_ebay(category: str, max_price_paise: int, sort: str = None,
         # makes, including the unbounded one that diagnoses an over-budget
         # search — otherwise dropping a word would quietly re-admit the
         # conditions the person did not ask for.
+        _search_ebay.last_rate_limited = False
         search_fn = functools.partial(search_live_catalog,
                                       condition_ids=condition_ids)
         results, used = _search_with_broadening(
@@ -186,6 +187,15 @@ def _search_ebay(category: str, max_price_paise: int, sort: str = None,
             print(f"[catalog] brand standing skipped: {exc}", flush=True)
         return results
     except Exception as e:
+        # WHY it is empty travels with the emptiness.
+        #
+        # Every failure here used to collapse into the same empty list, so a
+        # rate-limited key and a genuinely unmatched query were
+        # indistinguishable one layer up — and the pipeline, having only the
+        # empty list, told people to check their spelling while eBay was
+        # refusing every call.
+        from app.agent.ebay_client import RateLimited
+        _search_ebay.last_rate_limited = isinstance(e, RateLimited)
         print(f"[catalog] eBay search failed: {e} — returning no listings "
               f"rather than substituting any.", flush=True)
         return []

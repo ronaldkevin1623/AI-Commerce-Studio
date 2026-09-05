@@ -2,6 +2,32 @@
   box-sizing: border-box;
 }
 
+/*
+ * THE DOCUMENT IS NOT A SCROLL CONTAINER IN THIS APP.
+ *
+ * The shell is a fixed-height column and every page scrolls inside its own
+ * pane, so a scrollbar on the document can only ever be phantom — a few
+ * pixels of drift from `100vh` not quite matching the space actually
+ * available. That happens for reasons the app cannot see: a classic
+ * horizontal scrollbar taking a strip off the bottom, a zoom level that
+ * rounds, a browser whose viewport units include chrome that is really
+ * there. In every one of those cases the whole app slides up a little and
+ * leaves a band of empty page behind it, which is exactly the "I am at the
+ * start and can still scroll" that this fixes.
+ *
+ * Saying it outright costs nothing here and removes the entire class of
+ * bug: nothing in this app ever intends the document to scroll.
+ */
+html,
+body,
+#root {
+  height: 100%;
+  overflow: hidden;
+}
+
 body {
   margin: 0;
+  /* No rubber-banding past the end of an inner pane either. A bounce at
+     the end of a list reads as more content that failed to load. */
+  overscroll-behavior: none;
 }

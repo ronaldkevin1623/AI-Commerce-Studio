@@ -120,16 +120,55 @@ def apply(proposal_dict: dict, approved_by: str = "",
     )
 
     verdict = gate.evaluate(proposal)
-    if verdict["verdict"] != "allowed" and not approved_by:
+
+    # A HUMAN CAN CLEAR AN ESCALATION. A BLOCK IS NOT AN ESCALATION.
+    #
+    # These two verdicts mean different things and used to be treated as one.
+    # `escalated` means "this is beyond what the agent may decide alone, so a
+    # person decides" — an approval is exactly the answer to it. `blocked`
+    # means no: growth is switched off, or the day's budget is gone. Letting
+    # an approval clear that turned the daily cap into a suggestion, and the
+    # merchant console duly reported ₹1,557.60 committed against a ₹500 cap
+    # — every individual decision looking correct in the log, the bound
+    # nonetheless exceeded threefold.
+    refuse = (verdict["verdict"] == "blocked"
+              or (verdict["verdict"] != "allowed" and not approved_by))
+    if refuse:
         log_decision(
             action_type="growth_refused",
             amount_paise=proposal.cost_paise,
             decision=verdict["verdict"],
             reason=(f"[{proposal.agent}] {proposal.headline} — "
-                    f"{verdict['reason']}"),
+                    f"{verdict['reason']}"
+                    + (" A human approval cannot clear a block."
+                       if approved_by else "")),
         )
         return {"ok": False, "verdict": verdict["verdict"],
                 "reason": verdict["reason"]}
+
+    # THE DAILY CAP IS CHECKED HERE TOO, AND NOT ONLY BY `evaluate`.
+    #
+    # Two reasons, and neither is belt-and-braces. First, `evaluate` returns
+    # on its FIRST failing bound: a proposal over the per-action cap returns
+    # `escalated` at bound 2 and never reaches the daily check at bound 3, so
+    # an approved action of any size used to reach here having never been
+    # counted against the day at all. Second, evaluate-then-apply is
+    # check-then-act — two approvals in flight together both read the same
+    # remaining headroom and both fit. The reservation is transactional, so
+    # the second sees the first.
+    reservation = gate.reserve(proposal.cost_paise)
+    if not reservation["ok"]:
+        reason = (f"₹{reservation['committed_paise'] / 100:,.2f} of today's "
+                  f"₹{reservation['cap_paise'] / 100:,.0f} growth budget is "
+                  f"already committed, so this ₹{proposal.cost_paise / 100:,.2f} "
+                  f"does not fit. Approval cannot widen a daily cap.")
+        log_decision(
+            action_type="growth_refused",
+            amount_paise=proposal.cost_paise,
+            decision="blocked",
+            reason=f"[{proposal.agent}] {proposal.headline} — {reason}",
+        )
+        return {"ok": False, "verdict": "blocked", "reason": reason}
 
     offer_id = f"go-{uuid.uuid4().hex[:12]}"
     record = {
@@ -151,6 +190,10 @@ def apply(proposal_dict: dict, approved_by: str = "",
         from app.firebase_client import db
         db.collection("growth_offers").document(offer_id).set(record)
     except Exception as exc:
+        # The margin was reserved a moment ago and this action is not
+        # happening, so give it back rather than letting it hold the budget
+        # down for the rest of the day.
+        gate.release(proposal.cost_paise)
         return {"ok": False, "verdict": "blocked",
                 "reason": f"The offer could not be stored, so it was not "
                           f"applied: {exc}"}

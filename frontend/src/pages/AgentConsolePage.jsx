@@ -454,7 +454,26 @@ export default function AgentConsolePage() {
 
         {/* Empty state: greeting and composer centred in the viewport,
             so a fresh session feels like an invitation rather than a
-            blank page with a toolbar stuck to the bottom. */}
+            blank page with a toolbar stuck to the bottom.
+
+            TWO THINGS ABOUT THE CENTRING, BOTH OF WHICH WENT WRONG.
+
+            `pb: 8` was here to lift the block off true centre, which reads
+            better than dead-centre — but padding on a flex container is
+            part of its scroll height, so on any window short enough for
+            this to overflow, the last 64px you could scroll to were empty.
+            You reached the end of the page and kept going into nothing,
+            which is what a scrollbar would have shown if this pane had
+            one. A symmetric gutter gives the same breathing room and adds
+            no void.
+
+            `justify-content: center` is worse than it looks on a container
+            that can overflow: the overflow goes out of BOTH ends, and the
+            part above the start of the scroll box cannot be reached by
+            scrolling at all. `safe center` is the fix — it centres while
+            there is room and falls back to start-aligned the moment there
+            is not, so nothing is ever pushed somewhere you cannot scroll
+            to. */}
         {transcript.length === 0 && !trip ? (
           <Box
             sx={{
@@ -462,9 +481,9 @@ export default function AgentConsolePage() {
               display: "flex",
               flexDirection: "column",
               alignItems: "center",
-              justifyContent: "center",
+              justifyContent: "safe center",
               px: 3,
-              pb: 8,
+              py: 3,
             }}
           >
             <Stack direction="row" spacing={1.5} sx={{ alignItems: "center", mb: 3 }}>

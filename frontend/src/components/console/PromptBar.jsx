@@ -11,6 +11,21 @@ import SavingsIcon from "@mui/icons-material/SavingsOutlined";
 import ShoppingBagIcon from "@mui/icons-material/ShoppingBagOutlined";
 import FlightIcon from "@mui/icons-material/FlightTakeoffOutlined";
 import { API_BASE } from "../../config";
+import { useVoice } from "../../hooks/useVoice";
+import { MicButton } from "../shared/VoiceControls";
+import TypedPlaceholder from "../shared/TypedPlaceholder";
+
+// Things this agent genuinely does: a budget, a constraint, a deadline.
+// Every one of these is a request the gate and the buying pipeline can
+// actually take — a suggestion the agent would refuse is a bad first
+// impression dressed up as a feature.
+const BUYER_PROMPTS = [
+  "find me wireless earbuds under \u20b92,000",
+  "buy a desk lamp, nothing over \u20b91,500",
+  "find running shoes, size 9, delivered this week",
+  "compare two USB-C hubs and pick the better one",
+  "get me a laptop sleeve for a 14 inch machine",
+];
 
 /**
  * "+" menu — quick filters that append real phrases the intent parser
@@ -95,6 +110,15 @@ async function downscale(file, maxEdge = 1024, quality = 0.85) {
 export default function PromptBar({ onSend, onImage, onSectorChange, activeSector,
                                     disabled, placeholder, tall = false }) {
   const [draft, setDraft] = useState("");
+
+  // DICTATION WRITES THE DRAFT, IT DOES NOT SEND IT.
+  //
+  // What is heard lands in the same box typing lands in, so it can be read
+  // and corrected before it goes anywhere. Speech recognition mishears — a
+  // budget especially, where "under two thousand" and "under 2,000" are one
+  // slip apart — and an agent that acts on an unreviewed transcript would be
+  // spending money on a guess about what somebody said.
+  const voice = useVoice({ onTranscript: (heard) => setDraft(heard) });
   const [plusOpen, setPlusOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
   const [photo, setPhoto] = useState(null); // { dataUrl, name }
@@ -432,6 +456,24 @@ export default function PromptBar({ onSend, onImage, onSectorChange, activeSecto
           "&:focus-within": { borderColor: "rgba(255,255,255,0.22)" },
         }}
       >
+        {/* Behind the textarea: only while it is empty, only when the bar
+            is showing its own default prompt rather than a sector's
+            question, and never over a staged photo. */}
+        <Box sx={{ flex: 1, minWidth: 0, position: "relative" }}>
+        <TypedPlaceholder
+          prefix="Ask the agent to "
+          phrases={BUYER_PROMPTS}
+          active={!draft && !disabled && !photo && !placeholder
+                  && (!activeSector || activeSector === "products")}
+          sx={{
+            position: "absolute",
+            left: 0,
+            right: 0,
+            top: tall ? "4px" : "7px",
+            fontSize: 14,
+            lineHeight: 1.5,
+          }}
+        />
         <Box
           component="textarea"
           ref={inputRef}
@@ -485,8 +527,7 @@ export default function PromptBar({ onSend, onImage, onSectorChange, activeSecto
             }
           }}
           sx={{
-            flex: 1,
-            minWidth: 0,
+            width: "100%",
             resize: "none",
             border: "none",
             outline: "none",
@@ -497,9 +538,16 @@ export default function PromptBar({ onSend, onImage, onSectorChange, activeSecto
             color: "text.primary",
             py: tall ? "4px" : "7px",
             minHeight: tall ? 48 : undefined,
-            "&::placeholder": { color: "text.secondary" },
+            "&::placeholder": {
+              color: "text.secondary",
+              // Hidden only when the typed version is the one on screen.
+              opacity: (!draft && !disabled && !photo && !placeholder
+                        && (!activeSector || activeSector === "products"))
+                ? 0 : 1,
+            },
           }}
         />
+        </Box>
 
         {/* Controls: their own row when tall, inline otherwise */}
         <Box
@@ -512,6 +560,20 @@ export default function PromptBar({ onSend, onImage, onSectorChange, activeSecto
             ...(tall ? {} : { order: 0 }),
           }}
         >
+          {/* Both left-hand controls in one group. The row is
+              space-between with two ends; a bare third child lands in the
+              middle of the bar, which is how the plus ended up floating
+              there. */}
+          <Box sx={{ display: "flex", alignItems: "center", gap: 0.5 }}>
+          {voice.canDictate && (
+            <MicButton
+              listening={voice.listening}
+              onStart={voice.startDictation}
+              onStop={voice.stopDictation}
+              disabled={disabled}
+            />
+          )}
+
           <IconButton
             onClick={() => setPlusOpen((o) => !o)}
             sx={{
@@ -524,9 +586,17 @@ export default function PromptBar({ onSend, onImage, onSectorChange, activeSecto
           >
             <AddIcon sx={{ fontSize: 18 }} />
           </IconButton>
+          </Box>
 
           <IconButton
-            onClick={send}
+            // `() => send()` and not `send`: React hands a click handler the
+            // event as its first argument, and `send` treats its first
+            // argument as the text to send. Wired directly, `current` became
+            // a SyntheticEvent and `current.trim()` threw — the button threw
+            // on every press while Enter, which passes a real string, worked
+            // fine. That asymmetry is why it survived: the path most people
+            // test by hand was never the broken one.
+            onClick={() => send()}
             disabled={!canSend}
             sx={{
               width: 32,

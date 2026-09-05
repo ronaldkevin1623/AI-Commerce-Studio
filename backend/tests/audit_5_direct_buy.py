@@ -67,15 +67,30 @@ try:
     check("The seller created the Razorpay order, not us",
           bool(checkout_session.get("razorpay_order_id")),
           checkout_session.get("razorpay_order_id"))
-    check("The seller's total is the price the gate approved",
-          checkout_session.get("total_paise") == product["price_paise"],
-          f"Rs{(checkout_session.get('total_paise') or 0)/100:,.2f}")
+    # THE APPROVED FIGURE IS A CEILING, NOT AN EQUALITY.
+    #
+    # This asserted equality, which was right until a growth offer could
+    # actually change a price. Now a basket that matches an abandoned cart
+    # carrying a live recovery offer is charged less, and the seller says
+    # by how much — so the property worth defending is that the seller
+    # never charges MORE than was approved, and that any shortfall is
+    # accounted for rather than unexplained.
+    charged = checkout_session.get("total_paise") or 0
+    discount = checkout_session.get("discount_paise") or 0
+    check("The seller never charges more than the gate approved",
+          charged <= product["price_paise"],
+          f"Rs{charged/100:,.2f} against Rs{product['price_paise']/100:,.2f}")
+    check("Any shortfall is a disclosed growth discount, not a gap",
+          charged + discount == product["price_paise"],
+          f"Rs{charged/100:,.2f} + Rs{discount/100:,.2f} discount"
+          + (f" — {checkout_session.get('discount_note')}" if discount else ""))
 
     receipt = f"cp-{uuid.uuid4().hex[:16]}"
     save_order(
         order_id=receipt,
         razorpay_order_id=checkout_session["razorpay_order_id"],
-        amount_paise=product["price_paise"],
+        # What was actually charged, which is what the seller's session says.
+        amount_paise=charged,
         product_name=product["name"],
         customer_id="audit-direct-buy",
         product=product,
@@ -109,6 +124,45 @@ try:
     check("Stock was not moved by an unpaid checkout",
           fresh.get("stock") == product.get("stock"),
           f"{product.get('stock')} -> {fresh.get('stock')}")
+
+    # ── A settlement that never even attempts must still be legible ──────
+    #
+    # `_settle_with_merchant` returns {} when it finds no checkout session,
+    # and that silence is right for an order bought at another venue — there
+    # is nothing to settle and never was. It is wrong for an order from THIS
+    # store: the shop sold the goods, the buyer paid, and the shop is never
+    # told. Both branches are asserted, because the value of the log entry
+    # comes entirely from it appearing in one case and not the other.
+    print("\n=== A skipped settlement is recorded, an irrelevant one is not ===")
+
+    def _skips_logged():
+        return sum(1 for d in db.collection("decisions")
+                   .where("action_type", "==", "merchant_settlement_skipped")
+                   .stream())
+
+    other_venue = f"cp-audit-other-{uuid.uuid4().hex[:8]}"
+    save_order(order_id=other_venue, razorpay_order_id=f"order_{other_venue}",
+               amount_paise=1000, product_name="bought elsewhere",
+               customer_id="audit-skip", product={"id": "x"})
+    before = _skips_logged()
+    quiet = _settle_with_merchant(f"order_{other_venue}", "pay_IRRELEVANT")
+    check("An order from another venue settles silently",
+          quiet == {} and _skips_logged() == before,
+          "nothing to settle, so nothing to say")
+
+    own_store = f"cp-audit-own-{uuid.uuid4().hex[:8]}"
+    save_order(order_id=own_store, razorpay_order_id=f"order_{own_store}",
+               amount_paise=64900, product_name="sold by this store",
+               customer_id="audit-skip", product={"id": "y"})
+    db.collection("orders").document(own_store).update({"source": "merchant"})
+    before = _skips_logged()
+    lost = _settle_with_merchant(f"order_{own_store}", "pay_IRRELEVANT")
+    check("A merchant sale with no session is flagged, not swallowed",
+          lost == {} and _skips_logged() == before + 1,
+          "money moved and the seller would never know")
+
+    db.collection("orders").document(other_venue).delete()
+    db.collection("orders").document(own_store).delete()
 
 finally:
     print("\n=== Cleanup ===")

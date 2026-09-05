@@ -67,6 +67,30 @@ def cleanup():
 
 cleanup()
 
+# THE STORE MAY ALREADY BE PROMOTING SOMETHING.
+#
+# Every assertion below used to assume this suite was the only thing with a
+# promotion in it — `adapter.search(...) == []`, `available() is False`, "no
+# promotions left". A merchant running one real promotion then turned three
+# of them red, and none of those reds meant the sponsored channel was
+# broken; they meant the test had been measuring the whole store instead of
+# its own fixtures.
+#
+# Captured AFTER `cleanup()` so a crashed earlier run's leftovers are ours
+# to remove, not mistaken for somebody else's.
+TEST_IDS = {HUB, LAMP, DRAFT, "no-such-product-at-all"}
+PRE_EXISTING = {p["product_id"] for p in promotions.list_all()
+                if p.get("product_id") not in TEST_IDS}
+if PRE_EXISTING:
+    print(f"  (store already promotes {sorted(PRE_EXISTING)} — "
+          f"assertions below are scoped to this suite's own promotions)")
+
+
+def ours(items):
+    """Placements this suite is responsible for, ignoring the store's own."""
+    return [i for i in items if i.get("id") not in PRE_EXISTING]
+
+
 try:
     print("=== A. What a promotion is considered for ===")
     promotions.set_promotion(HUB, bid_paise=FLOOR, daily_budget_paise=FLOOR * 20)
@@ -80,9 +104,9 @@ try:
           "no charging a merchant for their own organic traffic")
 
     check("Cannot reach a category the search never touched",
-          adapter.search("coffee pods") == [], "'coffee pods' → nothing")
+          ours(adapter.search("coffee pods")) == [], "'coffee pods' → nothing")
     check("...nor an unrelated category that did return results",
-          adapter.search("desk lamp") == [], "'desk lamp' → nothing")
+          ours(adapter.search("desk lamp")) == [], "'desk lamp' → nothing")
 
     placement = adapter.search("mechanical keyboard")[0]
     check("Every placement is stamped sponsored", placement.get("sponsored") is True)
@@ -214,8 +238,17 @@ try:
           f'remaining ₹{exhausted["remaining_today_paise"] / 100:.2f}')
     check("...and it stops entering searches",
           HUB not in [i["id"] for i in adapter.search("mechanical keyboard")])
+    # `available()` is a statement about the VENUE, not about one promotion,
+    # so it cannot simply be asserted false while an unrelated promotion is
+    # live and fundable. The claim worth making either way is that the
+    # venue's availability is explained entirely by what can actually run.
+    still_fundable = [p for p in promotions.eligible()
+                      if p.get("product_id") not in TEST_IDS]
     check("...so the venue reports itself unavailable when nothing can run",
-          adapter.available() is False)
+          adapter.available() is bool(still_fundable),
+          "no test promotion can run"
+          + (f"; {len(still_fundable)} unrelated promotion(s) still can"
+             if still_fundable else ""))
 
     print("\n=== E. A promotion that could never run is refused ===")
     check("Unknown product",
@@ -292,7 +325,11 @@ try:
 
 finally:
     cleanup()
-    left = [p["product_id"] for p in promotions.list_all()]
+    # Only this suite's promotions. A promotion the merchant set before the
+    # run is not litter, and deleting it to make an assertion pass would be
+    # the test breaking the store it is meant to be checking.
+    left = [p["product_id"] for p in promotions.list_all()
+            if p.get("product_id") not in PRE_EXISTING]
     check("Every test promotion was cleaned up", left == [], str(left))
 
 print("\n" + "=" * 62)

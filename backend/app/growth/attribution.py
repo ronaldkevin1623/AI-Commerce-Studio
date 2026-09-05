@@ -112,12 +112,62 @@ def build(days: int = 30) -> dict:
                 "kind": "recovered_cart",
                 "target_id": session_id,
                 "revenue_paise": int(row.get("total_paise") or 0),
+                # What the offer actually cost, now that somebody took it.
+                "cost_paise": sum(int(o.get("cost_paise") or 0)
+                                  for o in by_session[session_id]),
+                # When the discount became real — the moment of the sale, not
+                # the moment of the offer. A discount belongs to the period
+                # the money moved in.
+                "when": _epoch(row.get("paid_at")) or _epoch(row.get("created_at")),
                 "agents": sorted({o.get("agent") or "" for o in by_session[session_id]}),
                 "why": ("An offer was applied to this specific checkout "
                         "session, and this specific session then paid."),
             })
     except Exception as exc:
         print(f"[attribution] could not read checkouts: {exc}", flush=True)
+
+    # 1b. THE OFFER WAS ACTUALLY SPENT ON THIS CHECKOUT.
+    #
+    # The rule above matches an offer to the session it was AIMED at. This
+    # matches it to the session it was REDEEMED on, which is a different
+    # and stronger claim: a returning buyer opens a new checkout, the
+    # discount comes off that one, and the offer carries its id. Without
+    # this branch the only conversions that could ever be counted were
+    # carts that paid on their original session — the one flow a returning
+    # buyer does not take.
+    by_offer_id = {str(o.get("offer_id") or ""): o for o in offers}
+    counted_sessions = {c["target_id"] for c in converted}
+    try:
+        from app.merchant import store
+        for doc in store.db.collection(store.SESSIONS).stream():
+            row = doc.to_dict() or {}
+            if (row.get("status") or "") != "paid":
+                continue
+            offer_id = str(row.get("discount_offer_id") or "")
+            offer = by_offer_id.get(offer_id)
+            if not offer:
+                continue
+            session_id = str(row.get("id") or doc.id)
+            if session_id in counted_sessions:
+                continue
+            converted.append({
+                "kind": "recovered_cart",
+                "target_id": session_id,
+                "revenue_paise": int(row.get("total_paise") or 0),
+                # What the discount REALLY cost, not what it was priced at:
+                # the offer was sized against the abandoned basket and spent
+                # against this one, and the amount that came off is the
+                # amount the merchant gave up.
+                "cost_paise": int(row.get("discount_paise")
+                                  or offer.get("cost_paise") or 0),
+                "when": _epoch(row.get("paid_at")) or _epoch(row.get("created_at")),
+                "agents": [offer.get("agent") or ""],
+                "why": (f"An approved offer was redeemed on this checkout — "
+                        f"₹{int(row.get('discount_paise') or 0) / 100:,.2f} came "
+                        f"off the price the buyer actually paid."),
+            })
+    except Exception as exc:
+        print(f"[attribution] could not read redemptions: {exc}", flush=True)
 
     # 2. A customer an offer was applied to, who then ordered — and only
     #    orders placed AFTER the offer. An earlier order is not a result of
@@ -140,6 +190,9 @@ def build(days: int = 30) -> dict:
                 "kind": "reactivated_customer",
                 "target_id": customer_id,
                 "revenue_paise": int(row.get("amount_paise") or 0),
+                "cost_paise": sum(int(o.get("cost_paise") or 0)
+                                  for o in by_customer[customer_id]),
+                "when": placed,
                 "agents": sorted({o.get("agent") or "" for o in by_customer[customer_id]}),
                 "why": ("A win-back offer was applied to this customer, and "
                         "this order was placed after it."),
@@ -178,6 +231,12 @@ def build(days: int = 30) -> dict:
                     "kind": "cross_sell",
                     "target_id": str(line.get("id")),
                     "revenue_paise": int(line.get("amount_paise") or 0),
+                    # Cross-sells are free, so this is almost always zero —
+                    # carried anyway so every conversion has the same shape
+                    # and a costed variant could never be missed.
+                    "cost_paise": sum(int(o.get("cost_paise") or 0)
+                                      for o in offers_for_line),
+                    "when": placed,
                     "agents": sorted({o.get("agent") or "" for o in offers_for_line}),
                     "why": (f"An approved cross-sell recommended "
                             f"{line.get('name') or line.get('id')}, and it was "
@@ -189,6 +248,7 @@ def build(days: int = 30) -> dict:
               flush=True)
 
     attributed_paise = sum(c["revenue_paise"] for c in converted)
+    redeemed_paise = sum(int(c.get("cost_paise") or 0) for c in converted)
 
     if not offers:
         headline = ("No growth action has been applied in this window, so "
@@ -204,12 +264,19 @@ def build(days: int = 30) -> dict:
         headline = (f"₹{attributed_paise / 100:,.2f} across "
                     f"{len(converted)} order{'' if len(converted) == 1 else 's'} "
                     f"traceable to a growth action, against "
-                    f"₹{spent_paise / 100:,.2f} of margin given away.")
+                    f"₹{spent_paise / 100:,.2f} of margin committed, of "
+                    f"which ₹{redeemed_paise / 100:,.2f} was actually taken.")
 
     return {
         "window_days": days,
         "actions_applied": len(offers),
         "margin_spent_paise": spent_paise,
+        # SPENT is what was committed to live offers. REDEEMED is what a
+        # customer actually took. They are different numbers and only the
+        # second one is a discount on a sale — an offer nobody accepted
+        # costs the merchant nothing, which is what the agents promise when
+        # they propose one.
+        "margin_redeemed_paise": redeemed_paise,
         "attributed_revenue_paise": attributed_paise,
         "conversions": converted,
         "headline": headline,
@@ -218,9 +285,39 @@ def build(days: int = 30) -> dict:
         "caveat": (
             "Attributed, not incremental. Some of these customers would have "
             "paid without the offer, and separating them needs a holdout "
-            "group this build has no traffic for. Margin spent is shown "
-            "beside the revenue for that reason: the difference is not "
-            "profit, and no conversion rate is claimed from "
+            "group this build has no traffic for. Margin committed and "
+            "margin redeemed are both shown beside the revenue for that "
+            "reason — an offer nobody took cost nothing, and the "
+            "difference between any of these is not profit. No conversion "
+            "rate is claimed from "
             f"{len(converted)} conversion{'' if len(converted) == 1 else 's'}."
         ),
     }
+
+
+def redeemed_between(start_epoch: float, end_epoch: float,
+                     lookback_days: int = 365) -> int:
+    """
+    Margin actually TAKEN by customers whose sale fell in this window.
+
+    Analytics needs this for its Discounts row, and it needs it per window
+    rather than for a fixed "last N days". The offer may have been applied
+    long before the sale; what matters here is when the money moved, so
+    conversions are filtered on `when` — the paid timestamp — rather than
+    on when the offer was created.
+
+    Returns 0 rather than raising: a Discounts row that cannot be computed
+    should read as nothing given away, not take the whole dashboard down.
+    """
+    try:
+        picture = build(days=lookback_days)
+    except Exception as exc:
+        print(f"[attribution] could not compute redeemed margin: {exc}",
+              flush=True)
+        return 0
+    total = 0
+    for conversion in picture.get("conversions") or []:
+        when = conversion.get("when") or 0
+        if start_epoch <= when <= end_epoch:
+            total += int(conversion.get("cost_paise") or 0)
+    return total

@@ -14,7 +14,7 @@ export default function MerchantGrowthAttributionPage() {
     <GrowthPage
       title="Attribution"
       subtitle={
-        "What came of the margin the agents gave away."
+        "What the margin committed to agent offers actually bought."
       }
     >
       <AttributionPanel card={CARD} />

@@ -27,7 +27,12 @@ const MAX_EDGE = 640;
 const QUALITY = 0.72;
 const MAX_STORED_BYTES = 180_000;
 
-async function compress(file) {
+// Exported so the merchant chat can attach a photo the same way the product
+// form does. One implementation means an image added by talking and an image
+// added by the form are the same bytes at the same size — a second copy of
+// this would drift, and the drift would show up as two different-looking
+// thumbnails for the same shop.
+export async function compress(file) {
   const dataUrl = await new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(reader.result);

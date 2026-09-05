@@ -279,6 +279,111 @@ def _normalise_summary(item: dict, usd_to_inr: int, category: str) -> dict:
     }
 
 
+class RateLimited(Exception):
+    """
+    eBay refused the call because too many have been made, not because the
+    search was wrong.
+
+    It has its own type because the two failures need different sentences.
+    A search that genuinely found nothing should be told "check the spelling
+    or widen it"; a search that was never run should not, and for an hour
+    this project told people to re-check spellings while the API was
+    answering 429 to everything. Advice that cannot possibly help is worse
+    than no advice, because it sends somebody off to fix their own query.
+    """
+
+
+# ── The search cache ─────────────────────────────────────────────────────
+#
+# eBay's Browse API has a daily call ceiling, and this project burns through
+# it: every suite run is dozens of searches, and a demo re-running the same
+# query is dozens more. Nothing here was cached, so an afternoon of testing
+# exhausted the quota and the agent's whole discovery capability went with
+# it.
+#
+# Short TTL on purpose. This is quota protection and a cushion against a
+# burst, not a store: five minutes is long enough to cover a repeated demo
+# query and a retry, and short enough that a price on screen is one eBay
+# was serving a moment ago. Prices and stock are the two things that must
+# not go stale, which is why this is not an hour.
+_SEARCH_CACHE: dict = {}
+_SEARCH_TTL_SECONDS = 300
+_SEARCH_CACHE_MAX = 128
+
+# Retry only helps a burst limit, never an exhausted daily quota, so it is
+# deliberately short: two quick attempts and then an honest failure. Sitting
+# in a long backoff would leave somebody watching a spinner while the answer
+# ("the quota is gone until it resets") was already known.
+_RETRY_DELAYS = (0.5, 1.5)
+
+# ── The breaker ──────────────────────────────────────────────────────────
+#
+# The retry above is right for a burst and wrong for an exhausted daily
+# quota, and the second is the case this project actually hits. With the
+# quota gone, every search paid three HTTP calls and two seconds of sleep to
+# be told the same thing, so the console sat for four seconds before saying
+# "eBay is rate limiting this key" — an answer that was already known after
+# the first call.
+#
+# It also made the parallelism the adapter registry exists for unmeasurable:
+# two 0.6-second venues took 3.2 seconds together, because one of them was
+# asleep in a backoff.
+#
+# So a 429 opens a breaker for a minute. Inside that window the call is
+# refused locally, instantly, and no further quota is spent finding out what
+# is already known. A minute is short enough that a burst limit clearing is
+# noticed almost at once, and long enough that a demo does not spend its
+# time re-asking an API that is saying no.
+_BREAKER_SECONDS = 60
+_rate_limited_until = 0.0
+
+
+def rate_limited_now() -> bool:
+    """Whether the breaker is open, without making a call to find out."""
+    return time.time() < _rate_limited_until
+
+
+def _open_breaker() -> None:
+    global _rate_limited_until
+    _rate_limited_until = time.time() + _BREAKER_SECONDS
+
+
+def _cache_key(query, max_price_paise, limit, sort, condition_ids, usd_to_inr):
+    # THE RATE IS PART OF THE KEY, BECAUSE IT IS PART OF THE ANSWER.
+    #
+    # eBay quotes USD and every price in the returned listings has already
+    # been converted, so two searches at two different rates are two
+    # different results for the same words. Leaving the rate out made the
+    # cache serve the first conversion forever: the dial audit moved
+    # usd_to_inr from 83 to 166 and got the same Rs580 back, which is a
+    # tunable financial control silently doing nothing.
+    return (str(query).strip().lower(), int(max_price_paise or 0),
+            int(limit or 0), str(sort or ""),
+            tuple(sorted(condition_ids or ())), int(usd_to_inr or 0))
+
+
+def _cached(key):
+    hit = _SEARCH_CACHE.get(key)
+    if not hit:
+        return None
+    stored_at, results, aspects = hit
+    if time.time() - stored_at > _SEARCH_TTL_SECONDS:
+        _SEARCH_CACHE.pop(key, None)
+        return None
+    # The aspects ride along: they are read off the function afterwards, so
+    # a cache hit that did not restore them would silently drop brand
+    # standing for every repeated search.
+    search_live_catalog.last_aspects = aspects
+    return list(results)
+
+
+def _remember_search(key, results, aspects):
+    if len(_SEARCH_CACHE) >= _SEARCH_CACHE_MAX:
+        oldest = min(_SEARCH_CACHE, key=lambda k: _SEARCH_CACHE[k][0])
+        _SEARCH_CACHE.pop(oldest, None)
+    _SEARCH_CACHE[key] = (time.time(), list(results), aspects)
+
+
 def search_live_catalog(query: str, max_price_paise: int, limit: int = None,
                         sort: str = None, condition_ids: set = None) -> list[dict]:
     """
@@ -294,11 +399,28 @@ def search_live_catalog(query: str, max_price_paise: int, limit: int = None,
     if limit is None:
         limit = settings.get("scout", "result_limit")
 
+    key = _cache_key(query, max_price_paise, limit, sort, condition_ids,
+                     usd_to_inr)
+    hit = _cached(key)
+    # The cache is consulted BEFORE the breaker on purpose: a result served
+    # from the last five minutes is still a real result, and refusing it
+    # because the quota has since run out would throw away the one thing
+    # that keeps working when eBay stops answering.
+    if hit is None and rate_limited_now():
+        raise RateLimited(
+            "eBay is rate limiting this key and the last refusal was less "
+            "than a minute ago, so no call was made. Its Browse API quota "
+            "resets at midnight US/Pacific.")
+    if hit is not None:
+        print(f"[ebay] served {len(hit)} listing(s) for {query!r} from the "
+              f"{_SEARCH_TTL_SECONDS // 60}-minute cache", flush=True)
+        return hit
+
     token = _get_access_token()
     max_price_inr = max_price_paise / 100
     max_price_usd = round(max_price_inr / usd_to_inr, 2)
 
-    response = httpx.get(
+    response = _get_with_retry(
         SEARCH_URL,
         headers={
             "Authorization": f"Bearer {token}",
@@ -337,7 +459,6 @@ def search_live_catalog(query: str, max_price_paise: int, limit: int = None,
         },
         timeout=10,
     )
-    response.raise_for_status()
     body = response.json()
     items = body.get("itemSummaries", [])
 
@@ -345,11 +466,39 @@ def search_live_catalog(query: str, max_price_paise: int, limit: int = None,
 
     # Handed to the brand module by the caller; kept on the function so the
     # return type stays a plain list of listings.
-    search_live_catalog.last_aspects = (
-        (body.get("refinement") or {}).get("aspectDistributions") or []
-    )
+    aspects = (body.get("refinement") or {}).get("aspectDistributions") or []
+    search_live_catalog.last_aspects = aspects
 
+    _remember_search(key, results, aspects)
     return results
+
+
+def _get_with_retry(url, **kwargs):
+    """
+    One eBay call, retried only for the failures a retry can fix.
+
+    429 and 5xx are worth a second attempt; a 400 means the request was
+    wrong and will be wrong again. A 429 that survives the retries is
+    raised as `RateLimited` rather than as a generic HTTP error, so the
+    caller can tell a person the truth about why there are no listings.
+    """
+    last = None
+    for attempt in range(len(_RETRY_DELAYS) + 1):
+        response = httpx.get(url, **kwargs)
+        if response.status_code == 429 or response.status_code >= 500:
+            last = response
+            if attempt < len(_RETRY_DELAYS):
+                time.sleep(_RETRY_DELAYS[attempt])
+                continue
+            if response.status_code == 429:
+                _open_breaker()
+                raise RateLimited(
+                    "eBay is rate limiting this key. Its Browse API quota "
+                    "resets at midnight US/Pacific.")
+        response.raise_for_status()
+        return response
+    last.raise_for_status()
+    return last
 
 
 # ── Multi-variant listings ───────────────────────────────────────────────

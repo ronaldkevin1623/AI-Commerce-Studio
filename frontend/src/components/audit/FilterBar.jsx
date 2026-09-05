@@ -1,7 +1,12 @@
 import { Box, Typography } from "@mui/material";
 
 const FILTERS = [
-  { key: "all", label: "All", dotColor: null },
+  // "Latest", not "All". The page subscribes to the most recent 50
+  // decisions; the log holds hundreds. A chip reading "All 50" told the
+  // reader they were looking at the whole trail and that the whole trail
+  // was fifty rows long — both untrue, and the second one flattering.
+  // Export reads the complete collection separately.
+  { key: "all", label: "Latest", dotColor: null },
   { key: "allowed", label: "Allowed", dotColor: "#22C55E" },
   { key: "escalated", label: "Escalated", dotColor: "#F59E0B" },
   { key: "blocked", label: "Blocked", dotColor: "#EF4444" },

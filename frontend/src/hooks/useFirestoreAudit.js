@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
-import { collection, onSnapshot, orderBy, query, limit } from "firebase/firestore";
+import {
+  collection, getDocs, onSnapshot, orderBy, query, limit,
+} from "firebase/firestore";
 import { db } from "../services/firebase";
 
 /**
@@ -41,4 +43,29 @@ export function useFirestoreAudit(maxEntries = 50) {
   }, [maxEntries]);
 
   return { decisions, loading, error };
+}
+
+
+/**
+ * EVERY decision, once, for export.
+ *
+ * The live subscription above is deliberately capped: a page that streams
+ * the whole log would get slower every day it runs, and nobody reads the
+ * four-hundredth row on screen.
+ *
+ * An export is a different promise. A button labelled "Export log" on a
+ * system whose central claim is a complete audit trail has to hand over
+ * the complete audit trail — it was writing the fifty rows the page
+ * happened to be holding, out of hundreds, with nothing in the file
+ * saying so. Someone reconciling money against that CSV would have
+ * concluded the missing actions never happened.
+ *
+ * So this reads the collection once, unlimited, at the moment the button
+ * is pressed. It is not a subscription and holds nothing open.
+ */
+export async function fetchAllDecisions() {
+  const snapshot = await getDocs(
+    query(collection(db, "decisions"), orderBy("timestamp", "desc"))
+  );
+  return snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
 }

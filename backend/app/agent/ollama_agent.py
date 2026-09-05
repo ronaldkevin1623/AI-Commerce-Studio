@@ -591,6 +591,38 @@ def names_accessory(user_text: str) -> bool:
 _FITS_RE = re.compile(r"^\s*(for|fits?|compatible\s+with)\b", re.IGNORECASE)
 
 
+# Where a title stops naming the product and starts describing it.
+#
+# Everything after a comma, a spaced dash or the words "with"/"includes"/
+# "plus" is a qualifier: capacity, contents, colour, what is in the box. The
+# product itself is named before that point.
+#
+# BRACKETS ARE NOT A BOUNDARY, THOUGH THEY LOOK LIKE ONE.
+#
+# They were, briefly, and it let a screen protector through a phone search:
+# "HinZann For Nothing Phone (3a) Privacy Screen (3a), Black" was cut at the
+# first bracket, leaving "HinZann For Nothing Phone" — the word "Screen" was
+# outside the head phrase and the accessory screen never saw it. A
+# parenthesis in a marketplace title almost always holds a model or variant
+# in the MIDDLE of the name, not a trailing qualifier after it, so treating
+# it as the end of the name truncates the very noun this function exists to
+# find. The same goes for a slash: "Case/Cover for iPhone" names the product
+# on both sides of it.
+_TRAILING_CLAUSE_RE = re.compile(
+    r",|\s[-–—]\s|\bwith\b|\bincludes?\b|\bincluding\b|\bplus\b",
+    re.IGNORECASE)
+
+
+def head_phrase(title: str) -> str:
+    """The part of a title that names the thing, without its qualifiers."""
+    text = (title or "").strip()
+    cut = _TRAILING_CLAUSE_RE.search(text)
+    lead = text[:cut.start()] if cut else text
+    # A qualifier that swallowed the whole title means the split was wrong,
+    # so fall back to the title rather than screening on an empty string.
+    return lead.strip() or text
+
+
 def is_accessory_for(title: str, user_text: str) -> bool:
     """
     Is this listing an accessory or component for the thing asked for,
@@ -598,13 +630,28 @@ def is_accessory_for(title: str, user_text: str) -> bool:
 
     Only ever true when the request named no accessory of its own — someone
     searching for a case should get cases.
+
+    THE ACCESSORY NOUN HAS TO BE WHAT THE THING IS, NOT SOMETHING IT HAS.
+
+    This used to scan the whole title, which meant any product whose title
+    mentioned an accessory anywhere was demoted to one. The shop's own
+    "Active Noise Cancelling Earbuds, 30h case" was screened out of every
+    search for earbuds, because "case" appears in it — the charging case is
+    a FEATURE of the product, named after the comma, and the earbuds are
+    what is for sale. A ₹3,490 product that no buying agent could find is a
+    worse failure than the one this screen exists to prevent.
+
+    So only the head phrase is read: the words before the first comma,
+    bracket, dash or "with". "Earbuds, 30h case" is earbuds; "Charging Case
+    for Earbuds" is still a case; "Wireless Earbuds with Charging Case" is
+    still earbuds. The screen keeps its teeth and stops eating the shop.
     """
     if names_accessory(user_text):
         return False
     text = title or ""
     if _FITS_RE.match(text):
         return True
-    return bool(_ACCESSORY_NOUN_RE.search(text))
+    return bool(_ACCESSORY_NOUN_RE.search(head_phrase(text)))
 
 
 # Words in a request that say nothing about which product is wanted.

@@ -118,82 +118,55 @@ export default function SecurityPage() {
             )}
           </Card>
 
-          <Card title="Why they never arrive here">
-            <Typography variant="body2" sx={{ color: "text.secondary", lineHeight: 1.8 }}>
-              Card numbers, netbanking logins and UPI PINs are typed into Razorpay
-              Checkout, which runs in an iframe served from Razorpay's own domain.
-              Browsers forbid this page from reading inside it, so those values are
-              never in this application's memory, never travel to its server, and
-              cannot be written to its database.
-            </Typography>
-            <Typography variant="body2" sx={{ color: "text.secondary", lineHeight: 1.8, mt: 1.5 }}>
-              What comes back across that boundary is the whole of what the payment
-              endpoint will accept:
-            </Typography>
-            <Stack direction="row" useFlexGap sx={{ flexWrap: "wrap", gap: 0.75, mt: 1.25 }}>
-              {data.accepted_by_verify_payment.map((f) => (
-                <Chip key={f} size="small" label={f}
-                      sx={{ fontFamily: "monospace", fontSize: 11 }} />
-              ))}
-            </Stack>
-            <Typography variant="body2" sx={{ color: "text.secondary", lineHeight: 1.8, mt: 1.5 }}>
-              The key this page holds is the publishable one —{" "}
-              <Box component="span" sx={{ fontFamily: "monospace" }}>
-                {data.razorpay_key_in_browser}
-              </Box>
-              . It can only start a payment. The secret that can move money stays on
-              the server and is never sent to a browser.
-            </Typography>
-          </Card>
-
           {/* The page audits what is stored; this is the part that lets
               someone do something about it. Placed before the inventory
               because a control that acts is more use than a list that
               only informs. */}
+          {/* THE ONE THING HERE THAT LEAVES THE MACHINE.
+              The database scan above can only ever report what was written
+              down. Voice is different: the audio never reaches the database,
+              so no scan would ever surface it, and a page that reported
+              "nothing sensitive found" while a microphone streamed a shop
+              owner's voice to a third party would be true and misleading at
+              once. It is stated here because it cannot be discovered. */}
+          <Card title="If you use the microphone">
+            <Typography variant="body2" sx={{ color: "text.secondary", lineHeight: 1.8 }}>
+              The voice buttons in the two chats use what the browser already
+              has, and the two halves behave differently:
+            </Typography>
+            <Box sx={{ display: "flex", gap: 1.5, mt: 1.5 }}>
+              <Typography
+                variant="body2"
+                sx={{ fontFamily: "monospace", minWidth: 118, color: "text.primary" }}
+              >
+                speaking
+              </Typography>
+              <Typography variant="body2" sx={{ color: "text.secondary", lineHeight: 1.7 }}>
+                Reading an answer aloud happens on this device. No audio and
+                no text leave it.
+              </Typography>
+            </Box>
+            <Box sx={{ display: "flex", gap: 1.5, mt: 1 }}>
+              <Typography
+                variant="body2"
+                sx={{ fontFamily: "monospace", minWidth: 118, color: "#F59E0B" }}
+              >
+                dictation
+              </Typography>
+              <Typography variant="body2" sx={{ color: "text.secondary", lineHeight: 1.7 }}>
+                Chrome and Edge transcribe speech by sending the recorded
+                audio to Google. That is the browser&rsquo;s implementation, not
+                a service this project added, and it is the only point at
+                which anything you say leaves your machine. Nothing is
+                recorded here: what comes back is text, it lands in the
+                message box for you to read, and only what you send is
+                stored. Type instead and the microphone is never opened.
+              </Typography>
+            </Box>
+          </Card>
+
           <Card title="Searches this agent remembers">
             <ForgetSearches />
-          </Card>
-
-          <Card title="What is kept about you">
-            <Typography variant="body2" sx={{ color: "text.secondary", lineHeight: 1.8, mb: 1.5 }}>
-              Not nothing — that would be the easy claim. This is the list:
-            </Typography>
-            {data.personal_data_held.map((p) => (
-              <Box key={p.field} sx={{ display: "flex", gap: 1.5, mb: 1 }}>
-                <Typography
-                  variant="body2"
-                  sx={{ fontFamily: "monospace", minWidth: 120, color: "text.primary" }}
-                >
-                  {p.field}
-                </Typography>
-                <Typography variant="body2" sx={{ color: "text.secondary", lineHeight: 1.7 }}>
-                  {p.why}
-                </Typography>
-              </Box>
-            ))}
-          </Card>
-
-          <Card title="Every field stored on a paid order">
-            <Typography variant="body2" sx={{ color: "text.secondary", lineHeight: 1.8, mb: 1.5 }}>
-              Taken from a real order that was paid for. These are all of them —
-              the payment is represented by identifiers that mean nothing without
-              Razorpay.
-            </Typography>
-            <Stack direction="row" useFlexGap sx={{ flexWrap: "wrap", gap: 0.75 }}>
-              {data.order_fields.map((f) => (
-                <Chip
-                  key={f}
-                  size="small"
-                  label={f}
-                  variant="outlined"
-                  sx={{
-                    fontFamily: "monospace",
-                    fontSize: 11,
-                    borderColor: f.includes("razorpay") ? "info.dark" : "divider",
-                  }}
-                />
-              ))}
-            </Stack>
           </Card>
         </Stack>
 

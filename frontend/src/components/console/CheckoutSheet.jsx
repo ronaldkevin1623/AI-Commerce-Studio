@@ -54,6 +54,9 @@ export default function CheckoutSheet({ open, product, onClose, onPay, busy, err
   if (!product) return null;
 
   const shipping = product.shipping_cost_paise || 0;
+  // What a growth offer took off this basket, if the merchant had one
+  // standing against it. Zero for every other purchase, which is most.
+  const discount = product.discount_paise || 0;
   const total = (product.price_paise || 0) + shipping;
   const hasAddress = Boolean(location);
 
@@ -209,9 +212,24 @@ export default function CheckoutSheet({ open, product, onClose, onPay, busy, err
         <Stack direction="row" sx={{ justifyContent: "space-between", mb: 0.5 }}>
           <Typography variant="caption" sx={{ color: "text.secondary" }}>Item</Typography>
           <Typography variant="caption" sx={{ fontVariantNumeric: "tabular-nums" }}>
-            {inr(product.price_paise)}
+            {/* The pre-discount figure when there is one, so the line
+                above and the total below add up. A total lower than the
+                item price with nothing in between is arithmetic the buyer
+                cannot check. */}
+            {inr(discount ? product.subtotal_paise : product.price_paise)}
           </Typography>
         </Stack>
+        {discount > 0 && (
+          <Stack direction="row" sx={{ justifyContent: "space-between", mb: 0.5 }}>
+            <Typography variant="caption" sx={{ color: "success.main" }}>
+              Offer applied
+            </Typography>
+            <Typography variant="caption"
+                        sx={{ color: "success.main", fontVariantNumeric: "tabular-nums" }}>
+              −{inr(discount)}
+            </Typography>
+          </Stack>
+        )}
         <Stack direction="row" sx={{ justifyContent: "space-between", mb: 1 }}>
           <Typography variant="caption" sx={{ color: "text.secondary" }}>Delivery</Typography>
           <Typography variant="caption" sx={{ fontVariantNumeric: "tabular-nums" }}>
@@ -228,6 +246,15 @@ export default function CheckoutSheet({ open, product, onClose, onPay, busy, err
         {/* Only the item price goes through Razorpay — postage is the
             seller's and was never part of the charge. Saying so beats a
             total that quietly disagrees with the receipt. */}
+        {discount > 0 && product.discount_note && (
+          <Typography variant="caption"
+                      sx={{ color: "text.secondary", display: "block", mt: 0.75,
+                            lineHeight: 1.6 }}>
+            {product.discount_note} The merchant approved it; nothing about
+            this listing or its ranking changed.
+          </Typography>
+        )}
+
         {shipping > 0 && (
           <Typography variant="caption" sx={{ color: "text.secondary", display: "block", mt: 0.75 }}>
             {inr(product.price_paise)} is charged through Razorpay. Delivery is the seller's

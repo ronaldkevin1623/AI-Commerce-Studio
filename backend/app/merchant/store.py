@@ -199,6 +199,185 @@ def create_product(fields: dict) -> dict:
     return {"ok": True, "product": {**record, "updated_at": None}}
 
 
+def update_product(product_id: str, fields: dict) -> dict:
+    """
+    Change a product that already exists.
+
+    THE SAME RULES AS CREATING ONE, DELIBERATELY.
+
+    A price of zero is not sellable whether it arrives at creation or three
+    edits later, so the validation here mirrors `create_product` rather than
+    trusting that a product which was once valid still is. The difference is
+    only which fields are present: an edit says what changed, and everything
+    it does not mention keeps its current value.
+
+    PUBLISHING IS AN EDIT LIKE ANY OTHER, AND ALSO NOT.
+
+    Moving `draft` to `active` is the act that makes goods discoverable and
+    purchasable by an agent. It goes through this one function so it cannot
+    be done by a path that skips the checks, and the caller is told the
+    transition happened so it can be written down as the thing it is.
+    """
+    ref = db.collection(PRODUCTS).document(product_id)
+    current = ref.get().to_dict() if ref.get().exists else None
+    if not current:
+        return {"ok": False, "error": f"No product with id {product_id!r}."}
+
+    patch = {}
+
+    if "name" in fields:
+        name = (fields.get("name") or "").strip()
+        if not name:
+            return {"ok": False, "error": "A product needs a name."}
+        patch["name"] = name
+
+    if "price_paise" in fields:
+        try:
+            price = int(fields.get("price_paise") or 0)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "Price must be a number."}
+        if price <= 0:
+            return {"ok": False, "error": "Price must be more than zero."}
+        patch["price_paise"] = price
+
+    if "stock" in fields:
+        try:
+            stock = int(fields.get("stock") or 0)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "Stock must be a whole number."}
+        if stock < 0:
+            return {"ok": False, "error": "Stock cannot be negative."}
+        patch["stock"] = stock
+
+    if "status" in fields:
+        status = (fields.get("status") or "").lower()
+        if status not in ("active", "draft"):
+            return {"ok": False, "error": "Status must be active or draft."}
+        patch["status"] = status
+
+    if "image" in fields:
+        image = (fields.get("image") or "").strip()
+        if len(image) > MAX_IMAGE_CHARS:
+            return {
+                "ok": False,
+                "error": f"Image is {len(image) // 1024}KB, over the "
+                         f"{MAX_IMAGE_CHARS // 1024}KB a product record can hold.",
+            }
+        patch["image"] = image or None
+
+    for plain in ("category", "description", "condition"):
+        if plain in fields:
+            patch[plain] = (fields.get(plain) or "").strip() or None
+
+    if not patch:
+        return {"ok": False, "error": "Nothing to change."}
+
+    patch["updated_at"] = firestore.SERVER_TIMESTAMP
+    ref.update(patch)
+
+    merged = {**current, **patch, "updated_at": None}
+    return {
+        "ok": True,
+        "product": merged,
+        # What actually moved, so the caller can say so rather than logging
+        # "a product was edited" and losing the only interesting part.
+        "changed": sorted(k for k in patch if k != "updated_at"),
+        "published": (current.get("status") != "active"
+                      and patch.get("status") == "active"),
+        "unpublished": (current.get("status") == "active"
+                        and patch.get("status") == "draft"),
+    }
+
+
+def delete_product(product_id: str) -> dict:
+    """
+    Remove a product from the catalogue.
+
+    WHAT SURVIVES, AND WHY THAT MAKES THIS SAFE
+
+    Orders and checkout sessions keep their OWN copy of every line — name,
+    price, quantity, image. Deleting a product therefore cannot rewrite what
+    a customer was charged or what a report said last month; the history is
+    self-contained and stays true. That is the property that makes deletion
+    a reasonable thing to offer at all.
+
+    WHAT DOES NOT SURVIVE, AND SO HAS TO BE CHECKED
+
+    An unpaid checkout that contains this product is a purchase somebody —
+    possibly an agent — is in the middle of. Deleting underneath it would
+    leave a session that can never be settled, so that is refused rather
+    than cleaned up: the merchant can cancel the checkout, or wait.
+
+    Promotions and growth offers point at a product id and would be left
+    aiming at nothing. Those ARE cleaned up, because a promotion for a
+    product that does not exist cannot be acted on and keeping it would only
+    make the growth pages lie about what is running.
+    """
+    ref = db.collection(PRODUCTS).document(product_id)
+    snapshot = ref.get()
+    if not snapshot.exists:
+        return {"ok": False, "error": f"No product with id {product_id!r}."}
+    product = snapshot.to_dict() or {}
+
+    # 1. A purchase in flight beats a tidy catalogue.
+    blocking = []
+    try:
+        for doc in db.collection(SESSIONS).stream():
+            row = doc.to_dict() or {}
+            if (row.get("status") or "") != "awaiting_payment":
+                continue
+            if any(str(li.get("id")) == product_id
+                   for li in (row.get("line_items") or [])):
+                blocking.append(str(row.get("id") or doc.id))
+    except Exception as exc:
+        # Unable to check is not the same as nothing found. Refuse.
+        return {"ok": False,
+                "error": f"Could not check open checkouts, so nothing was "
+                         f"deleted: {exc}"}
+    if blocking:
+        return {
+            "ok": False,
+            "error": (f"{product.get('name')} is in {len(blocking)} unpaid "
+                      f"checkout{'' if len(blocking) == 1 else 's'} "
+                      f"({', '.join(blocking[:3])}). Deleting it would leave "
+                      f"a session that can never be settled — cancel the "
+                      f"checkout first."),
+        }
+
+    # 2. Things that merely POINT at it are retired with it.
+    retired = []
+    try:
+        promo = db.collection("promotions").document(product_id).get()
+        if promo.exists:
+            db.collection("promotions").document(product_id).delete()
+            retired.append("its promotion")
+    except Exception as exc:
+        print(f"[store] could not remove promotion for {product_id}: {exc}",
+              flush=True)
+
+    offers = 0
+    try:
+        for doc in db.collection("growth_offers").stream():
+            row = doc.to_dict() or {}
+            if (row.get("state") or "") != "live":
+                continue
+            params = row.get("params") or {}
+            if (str(row.get("target_id")) == product_id
+                    or str(params.get("complement_id")) == product_id):
+                db.collection("growth_offers").document(doc.id).update(
+                    {"state": "retired",
+                     "retired_reason": "the product it pointed at was deleted"})
+                offers += 1
+    except Exception as exc:
+        print(f"[store] could not retire offers for {product_id}: {exc}",
+              flush=True)
+    if offers:
+        retired.append(f"{offers} growth offer{'' if offers == 1 else 's'}")
+
+    ref.delete()
+    return {"ok": True, "product": product, "retired": retired}
+
+
 def list_products(include_redteam: bool = True) -> list[dict]:
     rows = [d.to_dict() for d in db.collection(PRODUCTS).get()]
     if include_redteam:
@@ -318,13 +497,40 @@ def create_session(line_items: list[dict], buyer: dict = None) -> dict:
         return {"ok": False, "error": "No line items."}
 
     session_id = f"cs-{uuid.uuid4().hex[:16]}"
+
+    # A GROWTH OFFER IS APPLIED HERE, BEFORE ANY MONEY IS NAMED.
+    #
+    # This is the point where an approved discount becomes a lower price
+    # rather than a database row. It has to happen before the Razorpay order
+    # is created from `total_paise`, because an order is created for an
+    # amount and a discount applied afterwards is one the buyer never gets.
+    #
+    # `subtotal_paise` is kept beside the total so a receipt, a report and
+    # the audit trail can all show what the basket was worth and what was
+    # taken off it. A total that silently differs from the sum of its lines
+    # is the kind of arithmetic nobody can check.
+    discount = None
+    try:
+        from app.growth import redemption
+        discount = redemption.claim(session_id, total, resolved, buyer)
+    except Exception as exc:
+        # A discount that cannot be applied must never stop a sale. The
+        # buyer pays the full price, which is the price they were shown.
+        print(f"[store] growth offer not applied: {exc}", flush=True)
+        discount = None
+
     session = {
         "id": session_id,
         "merchant_id": MERCHANT_ID,
         "status": "open",
         "currency": "INR",
         "line_items": resolved,
-        "total_paise": total,
+        "subtotal_paise": total,
+        "discount_paise": int((discount or {}).get("discount_paise") or 0),
+        "discount_pct": int((discount or {}).get("discount_pct") or 0),
+        "discount_offer_id": (discount or {}).get("offer_id") or "",
+        "discount_note": (discount or {}).get("note") or "",
+        "total_paise": total - int((discount or {}).get("discount_paise") or 0),
         "buyer": buyer or {},
         "created_at": firestore.SERVER_TIMESTAMP,
     }
@@ -355,6 +561,18 @@ def mark_paid(session_id: str, payment_id: str) -> None:
         "razorpay_payment_id": payment_id,
         "paid_at": firestore.SERVER_TIMESTAMP,
     })
+
+    # The discount was given up for a sale that happened, so the offer is
+    # spent. Done after the status write and outside its own failure: a
+    # payment that arrived is recorded whatever happens to the offer.
+    offer_id = str(session.get("discount_offer_id") or "")
+    if offer_id:
+        try:
+            from app.growth import redemption
+            redemption.redeem(session_id, offer_id, payment_id)
+        except Exception as exc:
+            print(f"[store] offer {offer_id} not marked redeemed: {exc}",
+                  flush=True)
 
     for line in session.get("line_items", []):
         db.collection(PRODUCTS).document(line["id"]).update({

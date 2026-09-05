@@ -17,9 +17,11 @@ REM ---------------------------------------------------------------------
 setlocal
 set ROOT=%~dp0
 set SNAPSHOT=%ROOT%firebase-export
+set CONFIG=%ROOT%backend\firebase.json
 
 echo.
-echo   Starting the local Firestore emulator on 127.0.0.1:8085
+echo   Starting the local Firestore emulator
+echo   Config: %CONFIG%  (this file sets the port)
 echo   Data folder: %SNAPSHOT%
 echo   Stop with Ctrl+C so your data is saved.
 echo.
@@ -27,10 +29,10 @@ echo.
 cd /d "%ROOT%backend"
 
 if exist "%SNAPSHOT%" (
-  firebase emulators:start --only firestore --project cart-pilot-9a550 --import "%SNAPSHOT%" --export-on-exit "%SNAPSHOT%"
+  firebase emulators:start --config "%CONFIG%" --only firestore --project cart-pilot-9a550 --import "%SNAPSHOT%" --export-on-exit "%SNAPSHOT%"
 ) else (
   echo   No snapshot yet — starting empty and creating one on exit.
-  firebase emulators:start --only firestore --project cart-pilot-9a550 --export-on-exit "%SNAPSHOT%"
+  firebase emulators:start --config "%CONFIG%" --only firestore --project cart-pilot-9a550 --export-on-exit "%SNAPSHOT%"
 )
 
 endlocal

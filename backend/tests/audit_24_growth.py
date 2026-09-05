@@ -17,9 +17,20 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 os.chdir(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
 
+import dial_guard
+
 from app.agent import settings
 from app.growth import gate, registry
 from app.growth.base import Proposal
+
+# This suite moves the growth dials to test the bounds behind them — it
+# spends the daily budget deliberately, and finishes with growth switched
+# off. Those are the live dials the running app reads, so they are put back
+# when the process ends however it ends. `risk` is here for the same
+# reason: the transaction-policy section below raises the auto-approve
+# limit and puts it back inline, which does not happen if an assertion
+# between the two lines fails.
+dial_guard.protect("growthgate", "risk")
 
 PASSED = FAILED = 0
 
@@ -126,6 +137,71 @@ else:
     check("a costed proposal exists to test approval on", True,
           "none pending — every cart already carries an offer")
 settings.apply({"growthgate": {"min_sample": 3}})
+
+# ── An approval clears an escalation. It does not clear a block. ─────────
+#
+# These were once one branch — any verdict was bypassable by passing
+# `approved_by`, including a spent daily cap. The merchant console showed
+# the result of that: ₹1,557.60 committed against a ₹500 cap, with every
+# individual decision looking correct in the log. The distinction is what
+# makes "bounded autonomy" mean anything, so it is asserted directly.
+print("\n=== An approval cannot widen a bound the merchant set ===")
+
+settings.apply({"growthgate": {"enabled": False}})
+off = registry.apply(proposal(cost_paise=1000).to_dict(), approved_by="audit")
+check("an approval cannot switch growth back on",
+      off.get("ok") is False and off.get("verdict") == "blocked",
+      str(off.get("reason"))[:58])
+
+settings.apply({"growthgate": {"enabled": True, "daily_cap_inr": 0}})
+over = registry.apply(proposal(cost_paise=1000).to_dict(), approved_by="audit")
+check("an approval cannot spend past the daily cap",
+      over.get("ok") is False and over.get("verdict") == "blocked",
+      str(over.get("reason"))[:58])
+
+# The bound that escalates still behaves the other way round, or the fix
+# would have simply broken approvals instead of scoping them.
+settings.apply({"growthgate": {"daily_cap_inr": _headroom_inr}})
+# Just over the per-action cap rather than wildly over it. This applies a
+# REAL offer and logs a real growth_applied decision, so the amount is the
+# merchant's margin every time the suite runs — ₹201 proves the bound as
+# well as ₹500 does and costs the demo budget a third as much.
+_over_cap = (int(settings.get("growthgate", "max_giveaway_inr") or 200) * 100) + 100
+deep = registry.apply(proposal(cost_paise=_over_cap, sample_size=99,
+                               params={"discount_pct": 5}).to_dict(),
+                      approved_by="audit")
+check("an approval DOES still clear an escalation",
+      deep.get("ok") is True,
+      f"₹{_over_cap / 100:,.0f} over the ₹200 per-action cap, approved")
+if deep.get("ok"):
+    from app.firebase_client import db
+    db.collection("growth_offers").document(deep["offer_id"]).delete()
+    gate.release(_over_cap)
+
+# ── The cap is taken atomically, not read then written ──────────────────
+#
+# Two approvals moving through evaluate-then-apply together each read the
+# same remaining headroom and each conclude they fit. Reserving in a
+# transaction is what makes the second one see the first.
+print("\n=== The daily cap survives two actions in flight together ===")
+_spent = gate.spent_today_paise()
+settings.apply({"growthgate": {"daily_cap_inr": int((_spent + 15000) / 100)}})
+first = gate.reserve(10000)
+second = gate.reserve(10000)
+check("the first reservation fits", first.get("ok") is True,
+      f"₹100.00 into ₹{(_spent + 15000) / 100:,.0f}")
+check("the second is refused rather than both fitting",
+      second.get("ok") is False,
+      "only ₹50.00 of headroom was left")
+gate.release(10000)
+after_release = gate.reserve(10000)
+check("releasing hands the margin back", after_release.get("ok") is True)
+gate.release(10000)
+gate.release(10000)
+check("a double release cannot manufacture headroom",
+      gate.reserve(10000 + 15000).get("ok") is False,
+      "still bounded by the cap, not by the ledger")
+settings.apply({"growthgate": {"daily_cap_inr": _headroom_inr}})
 
 print("\n=== Honesty about thin data ===")
 experiment = next((p for p in registry.scan() if p["kind"] == "test_discount"), None)
@@ -260,12 +336,37 @@ from app.firebase_client import db as _db
 from app.merchant import store as _store
 
 _anchor, _complement = "cds-desk-lamp", "cds-monitor-stand"
+
+# THE ATTRIBUTION FIXTURES USE IDS NOTHING ELSE CAN TARGET.
+#
+# They used the real catalogue pair, and that quietly made this section
+# depend on the rest of the store holding no other cross-sell for the same
+# complement. It does not: a genuine approved offer (go-2192a9b5db2c,
+# desk lamp -> monitor stand) lives in the demo data, and once it was
+# restored these assertions broke in the worst way — not by miscounting,
+# but by INVERTING.
+#
+# `attribution` groups offers by the complement they recommend and takes
+# `earliest = min(created_at)` across all of them. With a real older offer
+# recommending the same product, the "placed before the offer" session is
+# no longer before the earliest offer, so it converts — and the assertion
+# written to prove such an order is ignored passes only while no other
+# offer for that product exists. Synthetic ids give this block sole
+# ownership of its complement, which is what it always assumed it had.
+#
+# The live_offer block further down keeps the REAL pair: it resolves the
+# complement against the catalogue, so a made-up id would have nothing to
+# look up.
+_iso = _uuid.uuid4().hex[:8]
+_iso_anchor = f"cds-audit-anchor-{_iso}"
+_iso_complement = f"cds-audit-complement-{_iso}"
 _offer_id = f"go-audit-{_uuid.uuid4().hex[:8]}"
 _now = _time.time()
 _db.collection("growth_offers").document(_offer_id).set({
     "offer_id": _offer_id, "agent": "crosssell", "kind": "cross_sell",
-    "target_kind": "product", "target_id": _anchor,
-    "cost_paise": 0, "params": {"complement_id": _complement, "basis": "category"},
+    "target_kind": "product", "target_id": _iso_anchor,
+    "cost_paise": 0,
+    "params": {"complement_id": _iso_complement, "basis": "category"},
     "approved_by": "audit", "campaign_id": None,
     "created_at": _now - 3600, "state": "live",
 })
@@ -280,9 +381,9 @@ _store.db.collection(_store.SESSIONS).document(_session_id).set({
     "total_paise": 278000,
     "buyer": {"name": "audit", "customer_id": "audit-buyer"},
     "line_items": [
-        {"id": _anchor, "name": "Warm LED Desk Lamp", "quantity": 1,
+        {"id": _iso_anchor, "name": "Warm LED Desk Lamp", "quantity": 1,
          "unit_price_paise": 149000, "amount_paise": 149000},
-        {"id": _complement, "name": "Bamboo Monitor Stand", "quantity": 1,
+        {"id": _iso_complement, "name": "Bamboo Monitor Stand", "quantity": 1,
          "unit_price_paise": 129000, "amount_paise": 129000},
     ],
 })
@@ -297,7 +398,7 @@ _store.db.collection(_store.SESSIONS).document(_early_id).set({
     "total_paise": 129000,
     "buyer": {"name": "audit", "customer_id": "audit-buyer"},
     "line_items": [
-        {"id": _complement, "name": "Bamboo Monitor Stand", "quantity": 1,
+        {"id": _iso_complement, "name": "Bamboo Monitor Stand", "quantity": 1,
          "unit_price_paise": 129000, "amount_paise": 129000},
     ],
 })
@@ -305,7 +406,13 @@ _store.db.collection(_store.SESSIONS).document(_early_id).set({
 try:
     from app.growth import attribution as _attr
     _result = _attr.build(days=30)
-    _crosses = [c for c in _result["conversions"] if c["kind"] == "cross_sell"]
+    # Scoped to the fixture's own complement. A bare count of every
+    # cross_sell conversion in the store measures the demo data as much as
+    # it measures this test, and passes or fails on what someone bought
+    # yesterday.
+    _crosses = [c for c in _result["conversions"]
+                if c["kind"] == "cross_sell"
+                and c["target_id"] == _iso_complement]
 
     check("A converted cross-sell is attributed at all",
           len(_crosses) == 1, f"{len(_crosses)} cross-sell conversions")
@@ -493,4 +600,10 @@ else:
 
 print("\n" + "=" * 62)
 print(f"  {PASSED} passed · {FAILED} failed")
+
+# The dials this suite moved, put back before the process leaves. The
+# atexit registration made by protect() covers the path where an
+# assertion above raises and never reaches this line.
+dial_guard.restore()
+
 sys.exit(1 if FAILED else 0)
